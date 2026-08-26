@@ -1,0 +1,8 @@
+# 依赖与临时文件
+node_modules/
+*.log
+.DS_Store
+
+# Wrangler 本地运行时
+.wrangler/
+cloudflare-*.json

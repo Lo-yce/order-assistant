@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>校园图书下单</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" />
+  <link rel="stylesheet" href="css/style.css" />
+  <style>
+    /* 顾客页为独立外观，无后台导航 */
+    .entry-hero { background: linear-gradient(135deg, var(--pri), #12b8ae); color: #fff; text-align:center; padding: 28px 16px; }
+    .entry-hero .big { font-size: 22px; font-weight: 800; }
+    .entry-hero .sm { font-size: 13px; opacity: .85; margin-top: 6px; }
+    form { padding: 16px; }
+    .ok-panel { text-align:center; padding: 40px 20px; }
+    .ok-panel .bi { font-size: 56px; color: var(--pri); }
+    .ok-panel .t { font-size: 20px; font-weight: 800; margin: 12px 0 6px; }
+    .ok-panel .s { color: var(--muted); font-size: 14px; }
+  </style>
+</head>
+<body>
+  <div class="entry-hero">
+    <div class="big"><i class="bi bi-book"></i> 校园二手图书 · 下单</div>
+    <div class="sm">填写下方信息即可下单，我们会按你的区域和时间配送</div>
+  </div>
+
+  <form id="orderForm" onsubmit="return false">
+    <div class="card">
+      <datalist id="bookNamesList"></datalist>
+
+      <div class="field">
+        <label>配送区域 <span class="req">*</span></label>
+        <select class="input building" id="eBuilding">
+          <option value="">选择你所在的大苑</option>
+          <option value="大千苑18栋">大千苑18栋</option>
+          <option value="长江苑19栋">长江苑19栋</option>
+          <option value="大洲苑21栋">大洲苑21栋</option>
+          <option value="培伦苑20栋">培伦苑20栋</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>宿舍编号 <span class="req">*</span></label>
+        <select class="input zone" id="eZone"><option value="">先选择大苑</option></select>
+      </div>
+      <div class="field">
+        <label>预定配送时间（不填则尽快配送）</label>
+        <input class="input time" id="eTime" type="datetime-local" />
+      </div>
+      <div class="field">
+        <label>联系方式（手机号 / QQ / 微信）<span class="req">*</span></label>
+        <input class="input contact" id="eContact" placeholder="用于配送联系" />
+      </div>
+      <div class="field">
+        <label>备注（选填）</label>
+        <input class="input remark" id="eRemark" placeholder="如：放门口、到了打电话" />
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 style="font-size:16px;margin-bottom:10px">需要购买的书籍 <span class="req">*</span></h3>
+      <div id="itemBox"></div>
+      <button type="button" class="btn ghost sm row-add" id="addRowBtn"><i class="bi bi-plus-lg"></i> 再添加一本</button>
+    </div>
+
+    <button type="button" class="btn primary block" id="eSubmit" style="margin:0 14px 20px;width:calc(100% - 28px)">提交订单</button>
+  </form>
+
+  <div class="ok-panel" id="okPanel" style="display:none"></div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const WORKER_BASE = "https://your-worker.workers.dev";
+    const BUILDINGS = {
+      "大千苑18栋": ["18-1","18-2","18-3","18-4"],
+      "长江苑19栋": ["19-1","19-2","19-3","19-4"],
+      "大洲苑21栋": ["21-1","21-2","21-3","21-4"],
+      "培伦苑20栋": ["20-1","20-2","20-3","20-4"],
+    };
+
+    function $(sel){ return document.querySelector(sel); }
+    function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+
+    let toastTimer;
+    function toast(msg){ const t=$("#toast"); t.textContent=msg; t.classList.add("show"); clearTimeout(toastTimer); toastTimer=setTimeout(()=>t.classList.remove("show"),2200); }
+
+    function itemRow(book, qty){
+      return `<div class="item-row">
+        <input class="input item-book" list="bookNamesList" placeholder="书名" value="${esc(book||"")}" />
+        <input class="input item-qty" type="number" min="1" step="1" placeholder="数量" value="${qty||1}" />
+        <button type="button" class="trash" onclick="delRow(this)"><i class="bi bi-x-lg"></i></button>
+      </div>`;
+    }
+    window.delRow = function(btn){
+      const box=$("#itemBox");
+      if(box.children.length<=1){ toast("至少保留一本书"); return; }
+      btn.closest(".item-row").remove();
+    };
+
+    // 大苑 → 编号联动
+    $("#eBuilding").addEventListener("change", function(){
+      const zones = BUILDINGS[this.value] || [];
+      const sel = $("#eZone");
+      sel.innerHTML = '<option value="">选择编号</option>' + zones.map(z=>`<option value="${z}">${z}</option>`).join("");
+      sel.disabled = !zones.length;
+    });
+
+    // 初始化一行 + 加载联想书名
+    $("#itemBox").innerHTML = itemRow();
+    $("#addRowBtn").onclick = ()=>{ $("#itemBox").insertAdjacentHTML("beforeend", itemRow()); };
+
+    fetch(WORKER_BASE + "/api/book-names").then(r=>r.json()).then(d=>{
+      if(d.ok) $("#bookNamesList").innerHTML = d.data.map(n=>`<option value="${esc(n)}"></option>`).join("");
+    }).catch(()=>{});
+
+    $("#eSubmit").onclick = async function(){
+      const building = $("#eBuilding").value;
+      const zone = $("#eZone").value;
+      const contact = $("#eContact").value.trim();
+      const remark = $("#eRemark").value.trim();
+      let time = $("#eTime").value;
+      if(time){ const d = new Date(time); time = isNaN(d)? "": d.toISOString(); }
+
+      const items = [];
+      document.querySelectorAll(".item-row").forEach(r=>{
+        const name = r.querySelector(".item-book").value.trim();
+        const qty = parseInt(r.querySelector(".item-qty").value,10);
+        if(name && qty>=1) items.push({book_name:name, quantity:qty});
+      });
+
+      if(!building||!zone) return toast("请选择你所在的配送区域和编号");
+      if(!contact) return toast("请填写联系方式");
+      if(!items.length) return toast("请至少填写一本书");
+
+      const btn=this; btn.disabled=true;
+      try{
+        // 简单防重复：按钮禁用期为 3 秒
+        const resp = await fetch(WORKER_BASE+"/api/orders", {method:"POST", headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({delivery_building:building, sub_zone:zone, deliver_time:time, contact, remark, items})});
+        const rj = await resp.json().catch(()=>({}));
+        if(!rj.ok) throw new Error(rj.error || "提交失败");
+        document.getElementById("orderForm").style.display="none";
+        const ok=$("#okPanel");
+        ok.style.display="block";
+        ok.innerHTML = `<div class="bi bi-check-circle-fill"></div>
+          <div class="t">下单成功！</div>
+          <div class="s">我们会尽快按你填写的区域和时间配送，请保持联系畅通。</div>`;
+      }catch(e){ toast("提交失败，请稍后再试"); btn.disabled=false; }
+    };
+  </script>
+</body>
+</html>
