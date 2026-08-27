@@ -76,7 +76,7 @@ async function loadBookNames() {
   try { state.bookNames = await api("/api/book-names"); } catch (e) {}
 }
 async function loadStats() {
-  try { state.stats = await api("/api/stats"); renderStats(); } catch (e) { toast(e.message); }
+  try { state.stats = await api("/api/stats"); App.renderStats(); } catch (e) { toast(e.message); }
 }
 
 /* ---------- Toast ---------- */
