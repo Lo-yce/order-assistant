@@ -23,3 +23,10 @@ CREATE TABLE IF NOT EXISTS order_items (
 CREATE INDEX IF NOT EXISTS idx_orders_deliver_time ON orders(deliver_time);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
 CREATE INDEX IF NOT EXISTS idx_items_order ON order_items(order_id);
+
+-- 书籍库存（由后台导入 Excel 维护；剩余 = stock - 订单需求合计）
+CREATE TABLE IF NOT EXISTS inventory (
+  book_name TEXT PRIMARY KEY,
+  stock INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL
+);

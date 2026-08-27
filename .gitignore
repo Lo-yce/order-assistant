@@ -12,5 +12,5 @@ cloudflare-*.json
 *.cf-token
 cf-token.txt
 
-# wrangler.toml 含真实 D1 database_id（数据库钥匙），不提交到公开仓库
-worker/wrangler.toml
+# wrangler.toml 中的 D1 database_id 本身无泄露风险（需配合 API 令牌才可操作），
+# 为支持 GitHub Actions 自动部署 Worker，将其纳入仓库管理

@@ -24,6 +24,7 @@ const state = {
   orders: [],
   bookNames: [],
   stats: [],
+  statsBuilding: "", // 统计 Tab 按苑筛选（"" = 全部）
   currentTab: "dashboard",
   building: null, // 区域配送进入时的苑过滤
   sub: null,      // 编号过滤
@@ -57,14 +58,46 @@ function fromLocalInput(val) {
   return isNaN(d) ? "" : d.toISOString();
 }
 
+/* ---------- 后台密码 ---------- */
+function getPwd() { return localStorage.getItem("adminPwd") || ""; }
+function askPwd(msg) {
+  return new Promise((resolve) => {
+    $("#pwdText").textContent = msg || "请输入团队共享密码，输入一次后本机记住。";
+    $("#pwdInput").value = "";
+    $("#pwdMask").classList.add("show");
+    window._pwdResolve = resolve;
+    setTimeout(() => { try { $("#pwdInput").focus(); } catch (e) {} }, 60);
+  });
+}
+window.App.closePwd = function () {
+  $("#pwdMask").classList.remove("show");
+  const r = window._pwdResolve; window._pwdResolve = null;
+  if (r) r(null);
+};
+window.App.submitPwd = function () {
+  const v = $("#pwdInput").value.trim();
+  if (v) localStorage.setItem("adminPwd", v);
+  $("#pwdMask").classList.remove("show");
+  const r = window._pwdResolve; window._pwdResolve = null;
+  if (r) r(v || null);
+};
+$("#pwdInput").addEventListener("keydown", (e) => { if (e.key === "Enter") window.App.submitPwd(); });
+
 /* ---------- API ---------- */
-async function api(path, method = "GET", body) {
+async function api(path, method = "GET", body, _retried) {
+  const headers = { "Content-Type": "application/json" };
+  const pwd = getPwd();
+  if (pwd) headers["X-Admin-Key"] = pwd;
   const res = await fetch(WORKER_BASE + path, {
     method,
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: body ? JSON.stringify(body) : undefined,
   });
   const data = await res.json().catch(() => ({}));
+  if (res.status === 401 && !_retried) {
+    const pwd2 = await askPwd((data.error || "请输入后台密码") + "，请重新输入：");
+    if (pwd2) return api(path, method, body, true);
+  }
   if (!data.ok) throw new Error(data.error || "请求失败");
   return data.data;
 }
@@ -76,7 +109,11 @@ async function loadBookNames() {
   try { state.bookNames = await api("/api/book-names"); } catch (e) {}
 }
 async function loadStats() {
-  try { state.stats = await api("/api/stats"); App.renderStats(); } catch (e) { toast(e.message); }
+  try {
+    const q = state.statsBuilding ? `?building=${encodeURIComponent(state.statsBuilding)}` : "";
+    state.stats = await api("/api/stats" + q);
+    App.renderStats();
+  } catch (e) { toast(e.message); }
 }
 
 /* ---------- Toast ---------- */
@@ -430,17 +467,91 @@ window.App.setSub = function (s) {
 window.App.closeModal = window.closeModal;
 
 /* ---------- 统计 ---------- */
+function renderStatChips() {
+  const cur = state.statsBuilding || "";
+  $("#statBuildingChips").innerHTML =
+    `<button class="chip all ${!cur ? "active" : ""}" onclick="App.setStatsBuilding('')">全部</button>` +
+    Object.keys(BUILDINGS).map((b) =>
+      `<button class="chip ${cur === b ? "active" : ""}" onclick="App.setStatsBuilding('${b}')">${b}</button>`
+    ).join("");
+}
+window.App.setStatsBuilding = function (b) { state.statsBuilding = b || ""; loadStats(); };
+
 window.App.renderStats = function () {
+  renderStatChips();
   const kw = ($("#statSearch").value || "").trim().toLowerCase();
   const list = state.stats.filter((s) => !kw || s.book_name.toLowerCase().includes(kw));
-  $("#statsInner").innerHTML = list.length
-    ? `<div class="stat-list">${list.map((s) => `
-      <div class="stat-card">
-        <div class="cnt">${s.total_quantity}</div>
-        <div class="name">${esc(s.book_name)}</div>
-        <div class="sub">${s.order_count} 个订单</div>
-      </div>`).join("")}</div>`
-    : '<div class="empty">暂无统计</div>';
+  if (!list.length) { $("#statsInner").innerHTML = '<div class="empty">暂无统计</div>'; return; }
+  $("#statsInner").innerHTML = `<div class="stat-list">${list.map((s) => {
+    let invHtml = "";
+    if (s.stock != null) {
+      const rem = s.remaining < 0
+        ? `<span style="color:var(--danger);font-weight:700">${s.remaining}（超卖）</span>`
+        : `<span style="color:${s.remaining === 0 ? "var(--warn)" : "var(--pri)"};font-weight:700">${s.remaining}</span>`;
+      invHtml = `<div class="sub">库存 ${s.stock} · 剩余 ${rem}</div>`;
+    }
+    return `<div class="stat-card">
+      <div class="cnt">${s.total_quantity}</div>
+      <div class="name">${esc(s.book_name)}</div>
+      <div class="sub">${s.order_count} 个订单</div>
+      ${invHtml}
+    </div>`;
+  }).join("")}</div>`;
+};
+
+/* ---------- 统计导出 CSV ---------- */
+window.App.exportStatsCsv = function () {
+  if (!state.stats.length) { toast("暂无统计数据"); return; }
+  const rows = [["书名", "需求数量", "订单数", "库存", "剩余"]];
+  for (const s of state.stats) {
+    rows.push([s.book_name, s.total_quantity, s.order_count, s.stock == null ? "" : s.stock, s.remaining == null ? "" : s.remaining]);
+  }
+  const csv = "\uFEFF" + rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\r\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `库存统计_${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+};
+
+/* ---------- Excel 库存导入 ---------- */
+window.App.importInventory = async function (input) {
+  const file = input.files && input.files[0];
+  input.value = "";
+  if (!file) return;
+  if (typeof XLSX === "undefined") { toast("Excel 组件未加载，请刷新页面重试"); return; }
+  try {
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: "array" });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+    // 若首行含"书名/库存"表头字样则跳过
+    let start = 0;
+    if (rows.length) {
+      const first = (rows[0] || []).map((c) => String(c).trim());
+      if (first.some((c) => c.includes("书名")) || first.some((c) => c.includes("库存"))) start = 1;
+    }
+    const items = [];
+    for (let i = start; i < rows.length; i++) {
+      const row = rows[i] || [];
+      const name = String(row[0] == null ? "" : row[0]).trim();
+      if (!name) continue;
+      const stock = Number(row[1]);
+      if (!Number.isFinite(stock) || stock < 0) { toast(`第 ${i + 1} 行「${name}」库存无效（需为≥0的数字）`); return; }
+      items.push({ book_name: name, stock: Math.round(stock) });
+    }
+    if (!items.length) { toast("未解析到有效数据（第1列书名、第2列库存）"); return; }
+    confirmModal("导入库存", `共解析到 ${items.length} 条库存记录，同书名将覆盖现有库存。确定导入？`, async () => {
+      try {
+        const res = await api("/api/inventory", "POST", { items });
+        toast(`已导入 ${res.imported} 条库存`);
+        loadStats();
+      } catch (e) { toast(e.message); }
+    });
+  } catch (e) {
+    toast("解析 Excel 失败：" + e.message);
+  }
 };
 
 /* ---------- 历史订单 ---------- */

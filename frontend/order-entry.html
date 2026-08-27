@@ -16,6 +16,12 @@
     .ok-panel .bi { font-size: 56px; color: var(--pri); }
     .ok-panel .t { font-size: 20px; font-weight: 800; margin: 12px 0 6px; }
     .ok-panel .s { color: var(--muted); font-size: 14px; }
+    .ok-panel .acts { margin-top: 18px; display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+    .my-order-item { border: 1px solid var(--pri-light); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; text-align: left; font-size: 13px; }
+    .my-order-item .tag { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; }
+    .tag-pending { background: #fdeaea; color: var(--danger); }
+    .tag-delivering { background: #fdf3e2; color: var(--warn); }
+    .tag-done { background: var(--pri-light); color: var(--pri-dark); }
   </style>
 </head>
 <body>
@@ -62,8 +68,19 @@
       <button type="button" class="btn ghost sm row-add" id="addRowBtn"><i class="bi bi-plus-lg"></i> 再添加一本</button>
     </div>
 
-    <button type="button" class="btn primary block" id="eSubmit" style="margin:0 14px 20px;width:calc(100% - 28px)">提交订单</button>
+    <button type="button" class="btn primary block" id="eSubmit" style="margin:0 14px 12px;width:calc(100% - 28px)">提交订单</button>
+    <button type="button" class="btn ghost sm" id="myOrdersBtn" style="margin:0 14px 20px">查我的订单</button>
   </form>
+
+  <div class="card" id="myOrdersCard" style="display:none;margin:0 14px 20px">
+    <h3 style="font-size:16px;margin-bottom:10px">查我的订单</h3>
+    <div class="field">
+      <input class="input" id="myContact" placeholder="输入下单时的联系方式（手机号 / QQ / 微信）" />
+    </div>
+    <button type="button" class="btn primary sm" onclick="queryMyOrders()">查询</button>
+    <button type="button" class="btn ghost sm" onclick="toggleMyOrders(false)">收起</button>
+    <div id="myOrdersResult" style="margin-top:12px"></div>
+  </div>
 
   <div class="ok-panel" id="okPanel" style="display:none"></div>
 
@@ -113,6 +130,35 @@
       if(d.ok) $("#bookNamesList").innerHTML = d.data.map(n=>`<option value="${esc(n)}"></option>`).join("");
     }).catch(()=>{});
 
+    // —— 查我的订单 ——
+    const STATUS_NAME = { pending:"待配送", delivering:"配送中", done:"已完成" };
+    window.toggleMyOrders = function(show){
+      $("#myOrdersCard").style.display = show ? "" : "none";
+      if(show) setTimeout(()=>{ try{ $("#myContact").focus(); }catch(e){} }, 60);
+    };
+    $("#myOrdersBtn").onclick = ()=> toggleMyOrders(true);
+    function renderMyOrders(list){
+      if(!list.length){ $("#myOrdersResult").innerHTML = '<div class="empty">没有找到相关订单</div>'; return; }
+      $("#myOrdersResult").innerHTML = list.map(o=>`
+        <div class="my-order-item">
+          <b>#${o.id}</b> · ${esc(o.delivery_building)} ${esc(o.sub_zone)}
+          <span class="tag tag-${o.status}">${STATUS_NAME[o.status]||o.status}</span>
+          <div style="color:var(--muted);margin-top:4px">${(o.items||[]).map(it=>`${esc(it.book_name)} ×${it.quantity}`).join("、")}</div>
+        </div>`).join("");
+    }
+    window.queryMyOrders = async function(){
+      const c = $("#myContact").value.trim();
+      if(!c) return toast("请输入下单时的联系方式");
+      const btnWrap = $("#myOrdersResult");
+      btnWrap.innerHTML = '<div class="empty">查询中…</div>';
+      try{
+        const resp = await fetch(WORKER_BASE + "/api/my-orders?contact=" + encodeURIComponent(c));
+        const rj = await resp.json().catch(()=>({}));
+        if(!rj.ok) throw new Error(rj.error || "查询失败");
+        renderMyOrders(rj.data || []);
+      }catch(e){ btnWrap.innerHTML = '<div class="empty">查询失败，请稍后再试</div>'; }
+    };
+
     $("#eSubmit").onclick = async function(){
       const building = $("#eBuilding").value;
       const zone = $("#eZone").value;
@@ -139,13 +185,35 @@
           body: JSON.stringify({delivery_building:building, sub_zone:zone, deliver_time:time, contact, remark, items})});
         const rj = await resp.json().catch(()=>({}));
         if(!rj.ok) throw new Error(rj.error || "提交失败");
+        const orderId = rj.data && rj.data.id;
         document.getElementById("orderForm").style.display="none";
+        toggleMyOrders(false);
         const ok=$("#okPanel");
         ok.style.display="block";
         ok.innerHTML = `<div class="bi bi-check-circle-fill"></div>
           <div class="t">下单成功！</div>
-          <div class="s">我们会尽快按你填写的区域和时间配送，请保持联系畅通。</div>`;
-      }catch(e){ toast("提交失败，请稍后再试"); btn.disabled=false; }
+          <div class="s">订单编号 <b>#${orderId}</b>，我们会尽快按你填写的区域和时间配送，请保持联系畅通。</div>
+          <div class="acts">
+            <button type="button" class="btn ghost sm" onclick="orderAgain()">再下一单</button>
+            <button type="button" class="btn primary sm" onclick="afterOrderQuery()">查我的订单</button>
+          </div>`;
+        window._lastContact = contact;
+      }catch(e){ toast(e.message || "提交失败，请稍后再试"); btn.disabled=false; }
+    };
+    // 再下一单：保留区域/编号/联系方式，清空书单
+    window.orderAgain = function(){
+      $("#okPanel").style.display="none";
+      document.getElementById("orderForm").style.display="";
+      $("#itemBox").innerHTML = itemRow();
+      $("#eSubmit").disabled = false;
+    };
+    // 下单成功后查单：自动带入刚填的联系方式
+    window.afterOrderQuery = function(){
+      document.getElementById("orderForm").style.display="none";
+      $("#okPanel").style.display="none";
+      toggleMyOrders(true);
+      if(window._lastContact) $("#myContact").value = window._lastContact;
+      queryMyOrders();
     };
   </script>
 </body>
