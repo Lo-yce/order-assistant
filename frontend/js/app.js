@@ -280,6 +280,81 @@ function renderOrders() {
   });
 
   $("#orderList").innerHTML = orders.length ? orders.map(orderCard).join("") : '<div class="empty">暂无订单</div>';
+  bindSwipeButtons();
+}
+
+/* ===== 滑动确认交互（外卖式）===== */
+function bindSwipeButtons() {
+  document.querySelectorAll(".swipe-btn").forEach((btn) => {
+    const knob = btn.querySelector(".swipe-knob");
+    const maxLeft = () => btn.clientWidth - knob.offsetWidth - 8; // 4px 边距 x2
+    let startX = 0, knobStart = 0, dragging = false;
+
+    const setKnob = (x) => { knob.style.left = Math.max(4, Math.min(x, maxLeft())) + "px"; };
+    const activate = (on) => {
+      btn.classList.toggle("activated", on);
+      const ratio = Math.min(1, (parseFloat(knob.style.left) || 4) / maxLeft());
+      btn.querySelector(".swipe-track").style.opacity = ratio > 0.05 ? ratio : 0;
+    };
+
+    const onDown = (e) => {
+      dragging = true;
+      startX = e.clientX ?? (e.touches && e.touches[0].clientX) ?? 0;
+      knobStart = parseFloat(knob.style.left) || 4;
+      knob.style.transition = "none";
+      e.preventDefault();
+    };
+    const onMove = (e) => {
+      if (!dragging) return;
+      const x = e.clientX ?? (e.touches && e.touches[0].clientX) ?? 0;
+      setKnob(knobStart + (x - startX));
+      activate(true);
+    };
+    const onUp = async () => {
+      if (!dragging) return;
+      dragging = false;
+      const reached = (parseFloat(knob.style.left) || 4) >= maxLeft() - 6;
+      knob.style.transition = "left .25s cubic-bezier(.2,.8,.3,1)";
+      if (reached) {
+        // 滑满：触发状态切换
+        const id = Number(btn.dataset.orderId);
+        const next = btn.dataset.nextStatus;
+        setKnob(4);
+        activate(false);
+        await App.setStatus(id, next, true);
+      } else {
+        // 未滑满：回弹
+        setKnob(4);
+        activate(false);
+      }
+    };
+
+    btn.addEventListener("mousedown", onDown);
+    btn.addEventListener("touchstart", onDown, { passive: false });
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("touchmove", onMove, { passive: false });
+    window.addEventListener("mouseup", onUp);
+    window.addEventListener("touchend", onUp);
+  });
+}
+
+/* 滑动确认按钮 HTML（外卖式） */
+function swipeBtnHtml(o) {
+  if (o.status === "pending") {
+    return `<div class="swipe-btn" style="--swipe-color: var(--warn)" data-order-id="${o.id}" data-next-status="delivering">
+      <div class="swipe-track"></div>
+      <div class="swipe-label">滑动开始配送 →</div>
+      <div class="swipe-knob"><i class="bi bi-truck"></i></div>
+    </div>`;
+  }
+  if (o.status === "delivering") {
+    return `<div class="swipe-btn" style="--swipe-color: var(--pri)" data-order-id="${o.id}" data-next-status="done">
+      <div class="swipe-track"></div>
+      <div class="swipe-label">滑动确认送达 →</div>
+      <div class="swipe-knob"><i class="bi bi-check2"></i></div>
+    </div>`;
+  }
+  return "";
 }
 
 function orderCard(o) {
@@ -289,13 +364,12 @@ function orderCard(o) {
   const time = `<span class="order-time"><i class="bi bi-clock"></i> ${fmtTime(o.deliver_time)}</span>`;
 
   const actions = `
-    <div class="order-actions">
-      ${o.status !== "pending" ? `<button class="btn ghost sm" onclick="App.setStatus(${o.id},'pending')">待配送</button>` : ""}
-      ${o.status !== "delivering" ? `<button class="btn warn sm" onclick="App.setStatus(${o.id},'delivering')">配送中</button>` : ""}
-      ${o.status !== "done" ? `<button class="btn primary sm" onclick="App.setStatus(${o.id},'done')">已完成</button>` : ""}
+    <div class="order-actions" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+      ${o.status !== "pending" ? `<button class="btn ghost sm" onclick="App.setStatus(${o.id},'pending')" title="退回待配送"><i class="bi bi-arrow-counterclockwise"></i> 退回</button>` : ""}
       <button class="btn ghost sm" onclick="App.editOrder(${o.id})"><i class="bi bi-pencil"></i> 编辑</button>
       <button class="btn ghost sm" onclick="App.delOrder(${o.id})"><i class="bi bi-trash3"></i> 删除</button>
-    </div>`;
+    </div>
+    ${swipeBtnHtml(o)}`;
 
   return `<div class="card order-card card-status-${o.status} ${o.status === "done" ? "done" : ""}">
     <div class="order-head">
@@ -457,26 +531,30 @@ async function submitForm() {
 }
 
 /* ---------- 状态 / 删除 ---------- */
-window.App.setStatus = function (id, status) {
+window.App.setStatus = function (id, status, skipConfirm) {
+  const doChange = async () => {
+    try {
+      await api(`/api/orders/${id}/status`, "PATCH", { status });
+      await loadOrders();
+      render();
+      const toName = STATUS[status] ? STATUS[status].name : status;
+      toast(`#${id} 已切换为「${toName}」`);
+    } catch (e) { toast(e.message); }
+  };
+  // 滑动确认本身即确认动作，跳过弹窗
+  if (skipConfirm) return doChange();
   const o = state.orders.find((x) => x.id === id);
   const fromName = o ? STATUS[o.status].name : "未知";
   const toName = STATUS[status] ? STATUS[status].name : status;
   const texts = {
-    delivering: `确定开始配送该订单吗？卡片会切换为「配送中」状态。`,
+    delivering: `确定开始配送该订单吗？`,
     done: `确定该订单已完成配送吗？完成后订单将置灰并排到列表末尾。`,
     pending: `确定把该订单退回「待配送」状态吗？`,
   };
   confirmModal(
     `状态切换：${fromName} → ${toName}`,
     `订单 #${id}（${o ? esc(o.delivery_building) + " " + esc(o.sub_zone) : ""}）\n${texts[status] || ""}`,
-    async () => {
-      try {
-        await api(`/api/orders/${id}/status`, "PATCH", { status });
-        await loadOrders();
-        render();
-        toast(`#${id} 已切换为「${toName}」`);
-      } catch (e) { toast(e.message); }
-    }
+    doChange
   );
 };
 window.App.delOrder = function (id) {

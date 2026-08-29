@@ -3,10 +3,11 @@
   --pri: #0e9a96;        /* 主色 青 */
   --pri-dark: #0b7a77;
   --pri-light: #d9f3f2;
-  --warn: #f0a020;       /* 配送中 */
-  --pending: #e0503c;    /* 待配送（红：未开始，醒目）*/
-  --warn-light: #fef4e2; /* 配送中卡片底色 */
-  --done: #9aa3ab;       /* 已完成 */
+  --warn: #e8a13d;        /* 配送中（柔和琥珀）*/
+  --pending: #5b8def;     /* 待配送（柔和蓝）*/
+  --warn-light: #fdf6ec;  /* 配送中卡片底色（奶杏）*/
+  --pending-light: #eef3fd; /* 待配送卡片底色 */
+  --done: #9aa3ab;        /* 已完成 */
   --bg: #f2f6f7;
   --card: #ffffff;
   --text: #22313f;
@@ -165,19 +166,17 @@ input, select, textarea { font: inherit; }
 
 /* 订单卡片 */
 .order-card { display: block; position: relative; overflow: hidden; }
-/* 状态左边条：一眼区分三种状态 */
+/* 状态左边条 + 柔和底色：一眼区分三种状态 */
 .order-card::before {
   content: "";
   position: absolute;
   left: 0; top: 0; bottom: 0;
-  width: 5px;
-  background: var(--muted);
+  width: 4px;
+  background: var(--done);
 }
+.card-status-pending { background: var(--pending-light); }
 .card-status-pending::before { background: var(--pending); }
-.card-status-delivering {
-  background: var(--warn-light);
-  border: 1.5px solid var(--warn);
-}
+.card-status-delivering { background: var(--warn-light); }
 .card-status-delivering::before { background: var(--warn); }
 .card-status-done::before { background: var(--done); }
 .order-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -196,6 +195,56 @@ input, select, textarea { font: inherit; }
 .tag.done { background: var(--done); }
 
 .order-meta { font-size: 13px; color: var(--muted); margin-top: 6px; line-height: 1.7; }
+
+/* ===== 滑动确认（外卖式）===== */
+.swipe-btn {
+  position: relative;
+  height: 46px;
+  border-radius: 999px;
+  background: #eef1f4;
+  overflow: hidden;
+  touch-action: none;        /* 阻止滑动时页面滚动 */
+  user-select: none;
+  margin-top: 10px;
+}
+.swipe-btn .swipe-track {
+  position: absolute;
+  inset: 0;
+  background: var(--swipe-color, var(--pri));
+  opacity: 0;
+  transition: opacity .15s;
+}
+.swipe-btn .swipe-label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 58px;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  pointer-events: none;
+}
+.swipe-btn .swipe-knob {
+  position: absolute;
+  left: 4px; top: 4px;
+  width: 38px; height: 38px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 2px 8px rgba(0,0,0,.18);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--swipe-color, var(--pri));
+  font-size: 18px;
+  cursor: grab;
+}
+.swipe-btn .swipe-knob:active { cursor: grabbing; }
+.swipe-btn.activated .swipe-track { opacity: 1; }
+.swipe-btn.activated .swipe-knob { color: #fff; background: rgba(255,255,255,.25); }
+.swipe-btn.done-flash .swipe-knob { transition: left .18s; }
 .order-items {
   margin: 10px 0;
   border: 1px solid var(--pri-light);
