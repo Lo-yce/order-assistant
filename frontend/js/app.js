@@ -409,6 +409,11 @@ window.App = {
   },
   closePwd,
   submitPwd,
+  logout() {
+    localStorage.removeItem("adminPwd");
+    toast("已退出，正在刷新…");
+    setTimeout(() => location.reload(), 800);
+  },
 };
 
 /* ---------- 提交表单 ---------- */
