@@ -60,14 +60,21 @@ function fromLocalInput(val) {
 
 /* ---------- 后台密码 ---------- */
 function getPwd() { return localStorage.getItem("adminPwd") || ""; }
+let _pwdPromise = null; // 当前未完成的密码弹窗（防止轮询重复弹窗吞输入）
 function askPwd(msg) {
-  return new Promise((resolve) => {
+  // 弹窗已打开：只更新提示文案，复用同一个 Promise，不清空用户输入
+  if (_pwdPromise) {
+    $("#pwdText").textContent = msg || "请输入团队共享密码，输入一次后本机记住。";
+    return _pwdPromise;
+  }
+  _pwdPromise = new Promise((resolve) => {
     $("#pwdText").textContent = msg || "请输入团队共享密码，输入一次后本机记住。";
     $("#pwdInput").value = "";
     $("#pwdMask").classList.add("show");
-    window._pwdResolve = resolve;
+    window._pwdResolve = (v) => { _pwdPromise = null; resolve(v); };
     setTimeout(() => { try { $("#pwdInput").focus(); } catch (e) {} }, 60);
   });
+  return _pwdPromise;
 }
 function closePwd() {
   $("#pwdMask").classList.remove("show");
@@ -76,10 +83,12 @@ function closePwd() {
 }
 function submitPwd() {
   const v = $("#pwdInput").value.trim();
-  if (v) localStorage.setItem("adminPwd", v);
+  // 空密码不关闭弹窗，避免轮询反复重弹吞掉输入
+  if (!v) { toast("请输入密码"); $("#pwdInput").focus(); return; }
+  localStorage.setItem("adminPwd", v);
   $("#pwdMask").classList.remove("show");
   const r = window._pwdResolve; window._pwdResolve = null;
-  if (r) r(v || null);
+  if (r) r(v);
 }
 $("#pwdInput").addEventListener("keydown", (e) => { if (e.key === "Enter") submitPwd(); });
 
