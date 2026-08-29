@@ -4,7 +4,8 @@
   --pri-dark: #0b7a77;
   --pri-light: #d9f3f2;
   --warn: #f0a020;       /* 配送中 */
-  --pending: #0e9a96;    /* 待配送 */
+  --pending: #e0503c;    /* 待配送（红：未开始，醒目）*/
+  --warn-light: #fef4e2; /* 配送中卡片底色 */
   --done: #9aa3ab;       /* 已完成 */
   --bg: #f2f6f7;
   --card: #ffffff;
@@ -163,7 +164,22 @@ input, select, textarea { font: inherit; }
 }
 
 /* 订单卡片 */
-.order-card { display: block; }
+.order-card { display: block; position: relative; overflow: hidden; }
+/* 状态左边条：一眼区分三种状态 */
+.order-card::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 5px;
+  background: var(--muted);
+}
+.card-status-pending::before { background: var(--pending); }
+.card-status-delivering {
+  background: var(--warn-light);
+  border: 1.5px solid var(--warn);
+}
+.card-status-delivering::before { background: var(--warn); }
+.card-status-done::before { background: var(--done); }
 .order-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .order-head .zone { font-weight: 700; font-size: 16px; }
 .order-time { font-size: 13px; color: var(--muted); }
@@ -274,7 +290,7 @@ textarea.input { resize: vertical; min-height: 64px; }
   max-width: 340px;
 }
 .modal h3 { margin-bottom: 10px; font-size: 17px; }
-.modal p { margin: 0 0 16px; color: var(--muted); font-size: 14px; line-height: 1.6; }
+.modal p { margin: 0 0 16px; color: var(--muted); font-size: 14px; line-height: 1.6; white-space: pre-line; }
 .modal .btns { display: flex; gap: 10px; }
 
 /* 筛选 chips */

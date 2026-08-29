@@ -297,7 +297,7 @@ function orderCard(o) {
       <button class="btn ghost sm" onclick="App.delOrder(${o.id})"><i class="bi bi-trash3"></i> 删除</button>
     </div>`;
 
-  return `<div class="card ${o.status === "done" ? "done" : ""}">
+  return `<div class="card order-card card-status-${o.status} ${o.status === "done" ? "done" : ""}">
     <div class="order-head">
       <span class="zone">${esc(o.delivery_building)} ${esc(o.sub_zone)}</span>
       <span class="tag ${s.cls}">${s.name}</span>
@@ -457,12 +457,27 @@ async function submitForm() {
 }
 
 /* ---------- 状态 / 删除 ---------- */
-window.App.setStatus = async function (id, status) {
-  try {
-    await api(`/api/orders/${id}/status`, "PATCH", { status });
-    await loadOrders();
-    render();
-  } catch (e) { toast(e.message); }
+window.App.setStatus = function (id, status) {
+  const o = state.orders.find((x) => x.id === id);
+  const fromName = o ? STATUS[o.status].name : "未知";
+  const toName = STATUS[status] ? STATUS[status].name : status;
+  const texts = {
+    delivering: `确定开始配送该订单吗？卡片会切换为「配送中」状态。`,
+    done: `确定该订单已完成配送吗？完成后订单将置灰并排到列表末尾。`,
+    pending: `确定把该订单退回「待配送」状态吗？`,
+  };
+  confirmModal(
+    `状态切换：${fromName} → ${toName}`,
+    `订单 #${id}（${o ? esc(o.delivery_building) + " " + esc(o.sub_zone) : ""}）\n${texts[status] || ""}`,
+    async () => {
+      try {
+        await api(`/api/orders/${id}/status`, "PATCH", { status });
+        await loadOrders();
+        render();
+        toast(`#${id} 已切换为「${toName}」`);
+      } catch (e) { toast(e.message); }
+    }
+  );
 };
 window.App.delOrder = function (id) {
   confirmModal("删除订单", "确定删除该订单吗？删除后不可恢复。", async () => {
