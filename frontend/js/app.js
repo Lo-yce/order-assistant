@@ -69,19 +69,19 @@ function askPwd(msg) {
     setTimeout(() => { try { $("#pwdInput").focus(); } catch (e) {} }, 60);
   });
 }
-window.App.closePwd = function () {
+function closePwd() {
   $("#pwdMask").classList.remove("show");
   const r = window._pwdResolve; window._pwdResolve = null;
   if (r) r(null);
-};
-window.App.submitPwd = function () {
+}
+function submitPwd() {
   const v = $("#pwdInput").value.trim();
   if (v) localStorage.setItem("adminPwd", v);
   $("#pwdMask").classList.remove("show");
   const r = window._pwdResolve; window._pwdResolve = null;
   if (r) r(v || null);
-};
-$("#pwdInput").addEventListener("keydown", (e) => { if (e.key === "Enter") window.App.submitPwd(); });
+}
+$("#pwdInput").addEventListener("keydown", (e) => { if (e.key === "Enter") submitPwd(); });
 
 /* ---------- API ---------- */
 async function api(path, method = "GET", body, _retried) {
@@ -398,6 +398,8 @@ window.App = {
     state.currentTab = "edit";
     navigate("edit", { id });
   },
+  closePwd,
+  submitPwd,
 };
 
 /* ---------- 提交表单 ---------- */
