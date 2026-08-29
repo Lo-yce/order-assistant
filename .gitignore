@@ -12,5 +12,8 @@ cloudflare-*.json
 *.cf-token
 cf-token.txt
 
+# git 凭据文件（本地私有，严禁提交到仓库）
+*git-credentials*
+
 # wrangler.toml 中的 D1 database_id 本身无泄露风险（需配合 API 令牌才可操作），
 # 为支持 GitHub Actions 自动部署 Worker，将其纳入仓库管理
