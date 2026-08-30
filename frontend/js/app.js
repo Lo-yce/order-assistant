@@ -104,7 +104,7 @@ async function api(path, method = "GET", body, _retried) {
   });
   const data = await res.json().catch(() => ({}));
   if (res.status === 401 && !_retried) {
-    const pwd2 = await askPwd((data.error || "请输入后台密码") + "，请重新输入：");
+    const pwd2 = await askPwd("请输入正确密码进入后台");
     if (pwd2) return api(path, method, body, true);
   }
   if (!data.ok) throw new Error(data.error || "请求失败");
@@ -655,8 +655,15 @@ window.App.renderStats = function () {
   renderStatChips();
   const kw = ($("#statSearch").value || "").trim();
   const list = state.stats.filter((s) => fuzzyMatchBook(s.book_name, kw));
+  // 排序：超卖最前（缺得越多越靠前）→ 已用完 → 普通；同组按需求数降序
+  const prio = (s) => (s.stock != null && s.remaining < 0) ? 0 : (s.stock != null && s.remaining === 0) ? 1 : 2;
+  list.sort((a, b) => prio(a) - prio(b) || b.total_quantity - a.total_quantity);
   if (!list.length) { $("#statsInner").innerHTML = '<div class="empty">暂无统计</div>'; return; }
   $("#statsInner").innerHTML = `<div class="stat-list">${list.map((s) => {
+    // 库存耗尽/超卖时卡片整体变色 + 角标，便于快速区分
+    let cls = "", flag = "";
+    if (s.stock != null && s.remaining < 0) { cls = "oversold"; flag = "超卖"; }
+    else if (s.stock != null && s.remaining === 0) { cls = "stock-out"; flag = "已用完"; }
     let invHtml = "";
     if (s.stock != null) {
       const rem = s.remaining < 0
@@ -664,7 +671,8 @@ window.App.renderStats = function () {
         : `<span style="color:${s.remaining === 0 ? "var(--warn)" : "var(--pri)"};font-weight:700">${s.remaining}</span>`;
       invHtml = `<div class="sub">库存 ${s.stock} · 剩余 ${rem}</div>`;
     }
-    return `<div class="stat-card">
+    return `<div class="stat-card ${cls}">
+      ${flag ? `<span class="stock-flag">${flag}</span>` : ""}
       <div class="cnt">${s.total_quantity}</div>
       <div class="name">${esc(s.book_name)}</div>
       <div class="sub">${s.order_count} 个订单</div>

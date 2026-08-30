@@ -330,6 +330,7 @@ textarea.input { resize: vertical; min-height: 64px; }
 /* 统计 */
 .stat-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
 .stat-card {
+  position: relative;
   background: var(--card);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
@@ -340,6 +341,32 @@ textarea.input { resize: vertical; min-height: 64px; }
 .stat-card .name { font-size: 14px; color: var(--text); word-break: break-word; }
 .stat-card .sub { font-size: 12px; color: var(--muted); }
 .stat-card .stock-edit-btn { margin-top: auto; align-self: stretch; }
+/* 库存耗尽：奶杏底 + 琥珀边框，一眼可辨 */
+.stat-card.stock-out {
+  background: var(--warn-light);
+  border: 1.5px solid var(--warn);
+  box-shadow: 0 4px 16px rgba(232, 161, 61, .18);
+}
+.stat-card.stock-out .cnt { color: var(--warn); }
+/* 超卖：淡红底 + 红边框，程度更重 */
+.stat-card.oversold {
+  background: #fdecec;
+  border: 1.5px solid var(--danger);
+  box-shadow: 0 4px 16px rgba(224, 80, 60, .18);
+}
+.stat-card.oversold .cnt { color: var(--danger); }
+/* 卡片右上角状态小标签 */
+.stat-card .stock-flag {
+  position: absolute;
+  top: 10px; right: 10px;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: #fff;
+}
+.stat-card.stock-out .stock-flag { background: var(--warn); }
+.stat-card.oversold .stock-flag { background: var(--danger); }
 
 /* 空态与消息 */
 .empty {
