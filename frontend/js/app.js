@@ -27,7 +27,7 @@ const state = {
   statsBuilding: "", // 统计 Tab 按苑筛选（"" = 全部）
   currentTab: "dashboard",
   building: null, // 区域配送进入时的苑过滤
-  sub: null,      // 编号过滤
+  sub: null,      // 楼号过滤
   statusFilter: "all",
 };
 
@@ -256,7 +256,7 @@ function renderOrders() {
   const r = parseHash();
   $("#topSub").textContent = r.building ? `${r.building} 订单` : "全部订单";
 
-  // 状态 chips + 区域/编号筛选
+  // 状态 chips + 区域/楼号筛选
   let chips = `<button class="chip all ${state.statusFilter === "all" ? "active" : ""}" onclick="App.setStatusFilter('all')">全部</button>
     <button class="chip ${state.statusFilter === "pending" ? "active" : ""}" onclick="App.setStatusFilter('pending')">待配送</button>
     <button class="chip ${state.statusFilter === "delivering" ? "active" : ""}" onclick="App.setStatusFilter('delivering')">配送中</button>
@@ -469,9 +469,9 @@ function renderForm(order) {
         </select>
       </div>
       <div class="field">
-        <label>编号 <span class="req">*</span></label>
+        <label>楼号 <span class="req">*</span></label>
         <select class="input zone">
-          <option value="">选择编号</option>
+          <option value="">选择楼号</option>
           ${subMap.map((z) => `<option value="${z}" ${z === sub ? "selected" : ""}>${z}</option>`).join("")}
         </select>
       </div>
@@ -506,7 +506,7 @@ window.App = {
   syncZone(sel) {
     const zone = sel.closest(".card").querySelector(".zone");
     const zones = BUILDINGS[sel.value] || [];
-    zone.innerHTML = '<option value="">选择编号</option>' +
+    zone.innerHTML = '<option value="">选择楼号</option>' +
       zones.map((z) => `<option value="${z}">${z}</option>`).join("");
   },
   addItemRow() {
@@ -550,7 +550,7 @@ async function submitForm() {
     if (name && qty >= 1) items.push({ book_name: name, quantity: qty });
   });
 
-  if (!building || !zone) return toast("请选择配送区域和编号");
+  if (!building || !zone) return toast("请选择配送区域和楼号");
   if (!contact) return toast("请填写联系方式");
   if (!items.length) return toast("请至少填写一行有效书籍");
 

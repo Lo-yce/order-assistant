@@ -45,7 +45,7 @@
         </select>
       </div>
       <div class="field">
-        <label>宿舍编号 <span class="req">*</span></label>
+        <label>宿舍楼号 <span class="req">*</span></label>
         <select class="input zone" id="eZone"><option value="">先选择大苑</option></select>
       </div>
       <div class="field">
@@ -118,7 +118,7 @@
     $("#eBuilding").addEventListener("change", function(){
       const zones = BUILDINGS[this.value] || [];
       const sel = $("#eZone");
-      sel.innerHTML = '<option value="">选择编号</option>' + zones.map(z=>`<option value="${z}">${z}</option>`).join("");
+      sel.innerHTML = '<option value="">选择楼号</option>' + zones.map(z=>`<option value="${z}">${z}</option>`).join("");
       sel.disabled = !zones.length;
     });
 
@@ -174,7 +174,7 @@
         if(name && qty>=1) items.push({book_name:name, quantity:qty});
       });
 
-      if(!building||!zone) return toast("请选择你所在的配送区域和编号");
+      if(!building||!zone) return toast("请选择你所在的配送区域和楼号");
       if(!contact) return toast("请填写联系方式");
       if(!items.length) return toast("请至少填写一本书");
 
@@ -200,7 +200,7 @@
         window._lastContact = contact;
       }catch(e){ toast(e.message || "提交失败，请稍后再试"); btn.disabled=false; }
     };
-    // 再下一单：保留区域/编号/联系方式，清空书单
+    // 再下一单：保留区域/楼号/联系方式，清空书单
     window.orderAgain = function(){
       $("#okPanel").style.display="none";
       document.getElementById("orderForm").style.display="";
