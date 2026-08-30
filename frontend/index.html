@@ -66,6 +66,19 @@
     <a href="#/stats" data-tab="stats"><i class="bi bi-bar-chart"></i>统计</a>
     <a href="#/history" data-tab="history"><i class="bi bi-clock-history"></i>历史</a>
   </nav>
+  <style>
+    /* 底部导航红点：有待配送订单时提示 */
+    .nav a { position: relative; }
+    .nav a .nav-dot {
+      position: absolute;
+      top: 2px; right: 50%; margin-right: -22px;
+      width: 9px; height: 9px;
+      border-radius: 50%;
+      background: var(--danger);
+      display: none;
+    }
+    .nav a.has-pending .nav-dot { display: block; }
+  </style>
 
   <div class="toast" id="toast"></div>
 

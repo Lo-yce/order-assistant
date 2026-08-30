@@ -276,6 +276,7 @@ input, select, textarea { font: inherit; }
 .field { margin-bottom: 14px; }
 .field label { display: block; font-size: 14px; font-weight: 600; margin-bottom: 6px; }
 .field label .req { color: var(--danger); }
+h3 .req { color: var(--danger); }
 .input, select.input, textarea.input {
   width: 100%;
   border: 1px solid #d8e0e4;

@@ -113,6 +113,7 @@ async function api(path, method = "GET", body, _retried) {
 
 async function loadOrders() {
   try { state.orders = await api("/api/orders"); } catch (e) { toast(e.message); }
+  updateNavDot(); // 订单变化后同步底部导航红点
 }
 async function loadBookNames() {
   try { state.bookNames = await api("/api/book-names"); } catch (e) {}
@@ -194,6 +195,14 @@ function setNavActive() {
   document.querySelectorAll(".nav a").forEach((a) => {
     a.classList.toggle("active", a.dataset.tab === map[r.tab]);
   });
+  updateNavDot();
+}
+
+/* 底部导航「区域配送」红点：存在待配送订单时亮起 */
+function updateNavDot() {
+  const hasPending = state.orders.some((o) => o.status === "pending");
+  const tab = document.querySelector('.nav a[data-tab="dashboard"]');
+  if (tab) tab.classList.toggle("has-pending", hasPending);
 }
 
 /* ---------- 渲染入口 ---------- */
