@@ -93,6 +93,24 @@
     </div>
   </div>
 
+  <!-- 库存快捷编辑弹窗 -->
+  <div class="modal-mask" id="invEditMask">
+    <div class="modal">
+      <h3>修改库存</h3>
+      <p id="invEditBook" style="font-weight:700;color:var(--text)"></p>
+      <div style="display:flex;align-items:center;gap:10px;margin-top:4px">
+        <button class="btn ghost sm" onclick="App.invEditStep(-1)" style="font-size:20px;flex:none">−</button>
+        <input class="input" type="number" id="invEditInput" min="0" step="1" style="width:100%;text-align:center;font-size:18px" />
+        <button class="btn ghost sm" onclick="App.invEditStep(1)" style="font-size:20px;flex:none">+</button>
+      </div>
+      <p style="margin-top:10px;margin-bottom:0">找到多的书直接加库存，剩余数量会自动重算。</p>
+      <div class="btns" style="margin-top:14px">
+        <button class="btn ghost" onclick="App.closeInvEdit()">取消</button>
+        <button class="btn primary" onclick="App.saveInvEdit()">保存</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 配送清单打印容器（隐藏） -->
   <div id="printArea" style="display:none"></div>
 

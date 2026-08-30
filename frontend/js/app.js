@@ -660,9 +660,48 @@ window.App.renderStats = function () {
       <div class="name">${esc(s.book_name)}</div>
       <div class="sub">${s.order_count} 个订单</div>
       ${invHtml}
+      <button class="btn ghost sm stock-edit-btn no-print" onclick="App.editStock('${esc(s.book_name).replace(/'/g, "\\'")}', ${s.stock == null ? "null" : s.stock})">
+        <i class="bi bi-pencil-square"></i> ${s.stock == null ? "设库存" : "改库存"}
+      </button>
     </div>`;
   }).join("")}</div>`;
 };
+
+/* ---------- 库存快捷编辑 ---------- */
+window.App.editStock = function (bookName, currentStock) {
+  const initVal = currentStock == null ? 0 : currentStock;
+  $("#invEditBook").textContent = bookName;
+  const input = $("#invEditInput");
+  input.value = initVal;
+  window._invEditName = bookName;
+  $("#invEditMask").classList.add("show");
+  setTimeout(() => { try { input.focus(); input.select(); } catch (e) {} }, 60);
+};
+window.App.invEditStep = function (d) {
+  const input = $("#invEditInput");
+  const v = parseInt(input.value, 10) || 0;
+  input.value = Math.max(0, v + d);
+};
+window.App.closeInvEdit = function () {
+  $("#invEditMask").classList.remove("show");
+};
+window.App.saveInvEdit = async function () {
+  const name = window._invEditName;
+  const v = parseInt($("#invEditInput").value, 10);
+  if (!name) return;
+  if (!Number.isFinite(v) || v < 0) { toast("库存需为≥0的整数"); return; }
+  try {
+    await api("/api/inventory", "POST", { items: [{ book_name: name, stock: v }] });
+    $("#invEditMask").classList.remove("show");
+    toast(`「${name}」库存已设为 ${v}`);
+    loadStats();
+  } catch (e) { toast(e.message); }
+};
+// 库存编辑弹窗：回车保存（脚本在 body 末尾加载，元素已就绪）
+(() => {
+  const inp = document.getElementById("invEditInput");
+  if (inp) inp.addEventListener("keydown", (e) => { if (e.key === "Enter") window.App.saveInvEdit(); });
+})();
 
 /* ---------- 统计导出 CSV ---------- */
 window.App.exportStatsCsv = function () {
