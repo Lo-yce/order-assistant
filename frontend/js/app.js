@@ -592,10 +592,32 @@ function renderStatChips() {
 }
 window.App.setStatsBuilding = function (b) { state.statsBuilding = b || ""; loadStats(); };
 
+/* 模糊匹配书名：支持空格分词（每词都需命中）+ 字符按顺序子序列匹配
+   例：搜「高数 下」可命中「高等数学（下册）」，搜「gdsx」不可 */
+function fuzzyMatchBook(name, kw) {
+  if (!kw) return true;
+  const n = name.toLowerCase();
+  const terms = kw.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!terms.length) return true;
+  // 每个词都需命中（子串，或按序字符子序列）
+  return terms.every((t) =>
+    n.includes(t) || isSubsequence(t, n)
+  );
+}
+// 子序列：t 的每个字符按顺序出现在 n 中（允许跳过中间字符）
+function isSubsequence(t, n) {
+  let i = 0;
+  for (const ch of n) {
+    if (ch === t[i]) i++;
+    if (i === t.length) return true;
+  }
+  return false;
+}
+
 window.App.renderStats = function () {
   renderStatChips();
-  const kw = ($("#statSearch").value || "").trim().toLowerCase();
-  const list = state.stats.filter((s) => !kw || s.book_name.toLowerCase().includes(kw));
+  const kw = ($("#statSearch").value || "").trim();
+  const list = state.stats.filter((s) => fuzzyMatchBook(s.book_name, kw));
   if (!list.length) { $("#statsInner").innerHTML = '<div class="empty">暂无统计</div>'; return; }
   $("#statsInner").innerHTML = `<div class="stat-list">${list.map((s) => {
     let invHtml = "";
