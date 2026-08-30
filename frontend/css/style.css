@@ -179,6 +179,22 @@ input, select, textarea { font: inherit; }
 .card-status-delivering { background: var(--warn-light); }
 .card-status-delivering::before { background: var(--warn); }
 .card-status-done::before { background: var(--done); }
+/* 滑动进度联动整卡变色：--tint(0~1) 越大卡片越接近目标状态色 */
+.order-card { --tint: 0; }
+.order-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: var(--tint);
+  transition: opacity .15s;
+}
+/* 卡片内容提到遮罩上层 */
+.order-card > * { position: relative; }
+/* 待配送(蓝) → 目标配送中(杏) */
+.card-status-pending::after { background: var(--warn-light); }
+/* 配送中(杏) → 目标已完成(灰白) */
+.card-status-delivering::after { background: #eceef0; }
 .order-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .order-head .zone { font-weight: 700; font-size: 16px; }
 .order-time { font-size: 13px; color: var(--muted); }

@@ -287,14 +287,18 @@ function renderOrders() {
 function bindSwipeButtons() {
   document.querySelectorAll(".swipe-btn").forEach((btn) => {
     const knob = btn.querySelector(".swipe-knob");
+    const card = btn.closest(".order-card");
     const maxLeft = () => btn.clientWidth - knob.offsetWidth - 8; // 4px 边距 x2
     let startX = 0, knobStart = 0, dragging = false;
 
     const setKnob = (x) => { knob.style.left = Math.max(4, Math.min(x, maxLeft())) + "px"; };
+    const progress = () => Math.min(1, ((parseFloat(knob.style.left) || 4) - 4) / (maxLeft() - 4));
     const activate = (on) => {
       btn.classList.toggle("activated", on);
-      const ratio = Math.min(1, (parseFloat(knob.style.left) || 4) / maxLeft());
+      const ratio = progress();
       btn.querySelector(".swipe-track").style.opacity = ratio > 0.05 ? ratio : 0;
+      // 整卡随滑动进度向目标状态色渐变（opacity 遮罩）
+      if (card) card.style.setProperty("--tint", String(ratio));
     };
 
     const onDown = (e) => {
@@ -321,11 +325,13 @@ function bindSwipeButtons() {
         const next = btn.dataset.nextStatus;
         setKnob(4);
         activate(false);
+        if (card) card.style.removeProperty("--tint");
         await App.setStatus(id, next, true);
       } else {
         // 未滑满：回弹
         setKnob(4);
         activate(false);
+        if (card) setTimeout(() => card.style.removeProperty("--tint"), 200);
       }
     };
 
