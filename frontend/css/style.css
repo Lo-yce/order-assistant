@@ -291,13 +291,40 @@ textarea.input { resize: vertical; min-height: 64px; }
 @media (max-width: 480px) { .form-grid { grid-template-columns: 1fr; } }
 
 /* 书单行编辑 */
-.item-row { display: grid; grid-template-columns: 1fr 72px 44px; gap: 8px; margin-bottom: 8px; align-items: center; }
+.item-row { display: grid; grid-template-columns: 1fr 86px 44px; gap: 8px; margin-bottom: 8px; align-items: start; }
 .item-row .trash {
   border: none; background: #fee; color: var(--danger);
   border-radius: 10px; height: 46px; font-size: 18px;
 }
 .item-row input { background: #fff; }
 .row-add { margin-top: 4px; }
+
+/* 书名模糊联想下拉 */
+.book-suggest-list {
+  display: none;
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0; right: 0;
+  background: #fff;
+  border: 1px solid var(--pri-light);
+  border-radius: 10px;
+  box-shadow: 0 6px 20px rgba(0,0,0,.12);
+  z-index: 300;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.book-suggest-item {
+  padding: 9px 12px;
+  font-size: 14px;
+  cursor: pointer;
+  word-break: break-all;
+  border-bottom: 1px solid #f2f6f7;
+}
+.book-suggest-item:last-child { border-bottom: none; }
+.book-suggest-item:hover, .book-suggest-item:active {
+  background: var(--pri-light);
+  color: var(--pri-dark);
+}
 
 /* 统计 */
 .stat-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }

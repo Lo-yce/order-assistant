@@ -399,10 +399,40 @@ function esc(s) {
 /* ---------- 订单表单（新建/编辑） ---------- */
 function itemRowHtml(book, qty) {
   return `<div class="item-row">
-    <input class="input item-book" list="bookNamesList" placeholder="书名" value="${esc(book || "")}" />
-    <input class="input item-qty" type="number" min="1" step="1" placeholder="数量" value="${qty || 1}" />
+    <div class="book-suggest" style="position:relative;flex:1">
+      <input class="input item-book" placeholder="书名（支持模糊搜索）" value="${esc(book || "")}" autocomplete="off"
+        oninput="App.onBookInput(this)" onfocus="App.onBookInput(this)"
+        onblur="App.hideBookSuggest(this)" />
+      <div class="book-suggest-list"></div>
+    </div>
+    <input class="input item-qty" type="number" min="1" step="1" placeholder="数量" value="${qty || 1}" style="width:86px;flex:none" />
     <button type="button" class="trash" onclick="App.delItemRow(this)"><i class="bi bi-x-lg"></i></button>
   </div>`;
+}
+
+/* 书名模糊联想：输入时按 fuzzyMatchBook 过滤历史书名，点选填充 */
+function onBookInput(input) {
+  const box = input.parentElement.querySelector(".book-suggest-list");
+  if (!box) return;
+  const kw = input.value.trim();
+  const list = kw
+    ? state.bookNames.filter((n) => fuzzyMatchBook(n, kw)).slice(0, 12)
+    : state.bookNames.slice(0, 8);
+  if (!list.length) { box.innerHTML = ""; box.style.display = "none"; return; }
+  box.innerHTML = list.map((n) =>
+    `<div class="book-suggest-item" onmousedown="App.pickBook(this,'${esc(n).replace(/'/g, "\\'")}')">${esc(n)}</div>`
+  ).join("");
+  box.style.display = "block";
+}
+function hideBookSuggest(input) {
+  const box = input.parentElement.querySelector(".book-suggest-list");
+  if (box) setTimeout(() => { box.style.display = "none"; }, 150); // 延迟以让 mousedown 先触发
+}
+function pickBook(item, name) {
+  const input = item.closest(".book-suggest").querySelector(".item-book");
+  input.value = name;
+  const box = item.parentElement;
+  box.style.display = "none";
 }
 
 function renderForm(order) {
@@ -420,13 +450,8 @@ function renderForm(order) {
     itemRows = itemRowHtml();
   }
 
-  const datalist = `<datalist id="bookNamesList">
-    ${state.bookNames.map((n) => `<option value="${esc(n)}"></option>`).join("")}
-  </datalist>`;
-
   const html = `
     <div class="card">
-      ${datalist}
       <div class="field">
         <label>配送区域 <span class="req">*</span></label>
         <select class="input building" onchange="App.syncZone(this)">
@@ -489,6 +514,9 @@ window.App = {
   },
   closePwd,
   submitPwd,
+  onBookInput,
+  hideBookSuggest,
+  pickBook,
   logout() {
     localStorage.removeItem("adminPwd");
     toast("已退出，正在刷新…");
