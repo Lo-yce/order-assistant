@@ -10,9 +10,9 @@ const BUILDINGS = {
 };
 const BUILD_ICONS = {
   "大千苑18栋": "bi-building",
-  "长江苑19栋": "bi-building-columns",
+  "长江苑19栋": "bi-water",
   "大洲苑21栋": "bi-houses",
-  "培伦苑20栋": "bi-p-square",
+  "培伦苑20栋": "bi-book",
 };
 const STATUS = {
   pending: { name: "待配送", cls: "pending" },
