@@ -174,11 +174,19 @@ export default {
 
 async function getOrders(db, url) {
   const status = url.searchParams.get('status');
-  // 排序：待/配送中按 deliver_time 空优先→升序；done 恒排最末
+  // 排序（配送路线友好）：进行中在前；待配送>配送中；同苑聚合+楼号自然序；尽快优先；自提最后
   const where = status ? 'WHERE status = ?' : '';
   const binds = status ? [status] : [];
-  const sql = `SELECT * FROM orders ${where}
+  // 楼号自然序（"18-2" → 18, 2）：自提/空楼号统一 99999 不参与排序（已被自提分组隔开）
+  const sql = `SELECT *,
+             CASE WHEN sub_zone = '' OR sub_zone IS NULL THEN 99999 ELSE CAST(substr(sub_zone, 1, instr(sub_zone, '-') - 1) AS INTEGER) END AS _b,
+             CASE WHEN sub_zone = '' OR sub_zone IS NULL THEN 99999 ELSE CAST(replace(substr(sub_zone, instr(sub_zone, '-') + 1), '-', '') AS INTEGER) END AS _u
+             FROM orders ${where}
     ORDER BY ((status='done') OR (status='cancelled')) ASC,
+             CASE status WHEN 'pending' THEN 0 WHEN 'delivering' THEN 1 ELSE 2 END ASC,
+             CASE WHEN delivery_method = 'self_pickup' THEN 1 ELSE 0 END ASC,
+             CASE delivery_building WHEN '大千苑18栋' THEN 0 WHEN '长江苑19栋' THEN 1 WHEN '大洲苑21栋' THEN 2 WHEN '培伦苑20栋' THEN 3 ELSE 4 END ASC,
+             _b ASC, _u ASC,
              (deliver_time IS NULL OR deliver_time='') DESC,
              deliver_time ASC`;
   const { results: orders } = await db.prepare(sql).bind(...binds).all();
@@ -189,7 +197,10 @@ async function getOrders(db, url) {
       id: it.id, book_name: it.book_name, quantity: it.quantity,
     });
   }
-  for (const o of orders) o.items = byOrder[o.id] || [];
+  for (const o of orders) {
+    o.items = byOrder[o.id] || [];
+    delete o._b; delete o._u; // 排序临时列不返回
+  }
   return json({ ok: true, data: orders });
 }
 

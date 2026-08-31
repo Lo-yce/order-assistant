@@ -14,6 +14,8 @@ const BUILD_ICONS = {
   "大洲苑21栋": "bi-houses",
   "培伦苑20栋": "bi-book",
 };
+/* 配送排序用：苑的固定顺序（与 BUILDINGS 键序一致） */
+const BUILDING_ORDER = Object.keys(BUILDINGS);
 const STATUS = {
   pending: { name: "待配送", cls: "pending" },
   delivering: { name: "配送中", cls: "delivering" },
@@ -309,16 +311,39 @@ function renderOrders() {
   if (state.statusFilter === "pickup") orders = orders.filter((o) => o.delivery_method === "self_pickup");
   else if (state.statusFilter !== "all") orders = orders.filter((o) => o.status === state.statusFilter);
 
-  // 排序：尽快优先 → 时间升序 → 已完成/已取消最末
+  // 排序（配送路线友好）：
+  // 1. 进行中的在前，已完成/已取消最末
+  // 2. 待配送 > 配送中（先看到要送的）
+  // 3. 同苑聚合 + 楼号自然序（18-1 < 18-2 …，不出现 19-1 夹在 18 栋中间）
+  // 4. 尽快(无时间) > 指定时间早的在前
+  // 5. 自提单按地点排最后（等顾客上门，不参与跑楼）
   orders.sort((a, b) => {
-    const aEnd = a.status === "done" || a.status === "cancelled";
-    const bEnd = b.status === "done" || b.status === "cancelled";
-    if (aEnd && !bEnd) return 1;
-    if (!aEnd && bEnd) return -1;
-    const ta = a.deliver_time || "0000", tb = b.deliver_time || "0000";
+    const ended = (o) => o.status === "done" || o.status === "cancelled";
+    if (ended(a) !== ended(b)) return ended(a) ? 1 : -1;
+
+    const stRank = (o) => (o.status === "pending" ? 0 : o.status === "delivering" ? 1 : 2);
+    if (stRank(a) !== stRank(b)) return stRank(a) - stRank(b);
+
+    const pickRank = (o) => (o.delivery_method === "self_pickup" ? 1 : 0);
+    if (pickRank(a) !== pickRank(b)) return pickRank(a) - pickRank(b);
+
+    // 楼号自然序：18-2 → 苑名 "18"、号 2
+    const subKey = (o) => {
+      const m = String(o.sub_zone || "").match(/(\d+)-(\d+)/);
+      if (!m) return [9999, 9999];
+      return [Number(m[1]), Number(m[2])];
+    };
+    if (!building) {
+      const bc = BUILDING_ORDER.indexOf(a.delivery_building) - BUILDING_ORDER.indexOf(b.delivery_building);
+      if (bc !== 0) return bc;
+    }
+    const [ab, au] = subKey(a), [bb, bu] = subKey(b);
+    if (ab !== bb) return ab - bb;
+    if (au !== bu) return au - bu;
+
     if (!a.deliver_time && b.deliver_time) return -1;
     if (a.deliver_time && !b.deliver_time) return 1;
-    return ta.localeCompare(tb);
+    return String(a.deliver_time).localeCompare(String(b.deliver_time));
   });
 
   $("#orderList").innerHTML = orders.length ? orders.map(orderCard).join("") : '<div class="empty">暂无订单</div>';

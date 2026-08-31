@@ -173,17 +173,36 @@ export async function onRequest({ request, env }) {
   }
 }
 
-/* ---------- 排序：待/配送中按 deliver_time 空优先→升序；done 恒排最末 ---------- */
+/* ---------- 排序（配送路线友好）----------
+ * 进行中在前；待配送 > 配送中；同苑聚合 + 楼号自然序；尽快优先；自提排最后 */
+const BUILDING_ORDER = ['大千苑18栋', '长江苑19栋', '大洲苑21栋', '培伦苑20栋'];
+
+function subKey(o) {
+  const m = String(o.sub_zone || '').match(/(\d+)-(\d+)/);
+  if (!m) return [9999, 9999];
+  return [Number(m[1]), Number(m[2])];
+}
+
 function sortOrders(list) {
   return [...list].sort((a, b) => {
-    const aEnd = a.status === 'done' || a.status === 'cancelled';
-    const bEnd = b.status === 'done' || b.status === 'cancelled';
-    if (aEnd !== bEnd) return aEnd ? 1 : -1;
-    const ta = a.deliver_time || '', tb = b.deliver_time || '';
-    if (!ta && tb) return -1;
-    if (ta && !tb) return 1;
-    if (ta && tb) return ta < tb ? -1 : ta > tb ? 1 : 0;
-    return 0;
+    const ended = (o) => o.status === 'done' || o.status === 'cancelled';
+    if (ended(a) !== ended(b)) return ended(a) ? 1 : -1;
+
+    const stRank = (o) => (o.status === 'pending' ? 0 : o.status === 'delivering' ? 1 : 2);
+    if (stRank(a) !== stRank(b)) return stRank(a) - stRank(b);
+
+    const pickRank = (o) => (o.delivery_method === 'self_pickup' ? 1 : 0);
+    if (pickRank(a) !== pickRank(b)) return pickRank(a) - pickRank(b);
+
+    const bc = BUILDING_ORDER.indexOf(a.delivery_building) - BUILDING_ORDER.indexOf(b.delivery_building);
+    if (bc !== 0) return bc;
+    const [ab, au] = subKey(a), [bb, bu] = subKey(b);
+    if (ab !== bb) return ab - bb;
+    if (au !== bu) return au - bu;
+
+    if (!a.deliver_time && b.deliver_time) return -1;
+    if (a.deliver_time && !b.deliver_time) return 1;
+    return String(a.deliver_time).localeCompare(String(b.deliver_time));
   });
 }
 
