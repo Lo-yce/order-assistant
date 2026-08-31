@@ -87,7 +87,8 @@
   <div class="toast" id="toast"></div>
 
   <script>
-    const WORKER_BASE = "https://order-assistant-worker.loyce.workers.dev";
+    /* API 地址：EdgeOne Pages 部署时前后端同域走相对路径；GitHub Pages 部署时走 Cloudflare Worker */
+    const WORKER_BASE = location.hostname.endsWith("edgeone.app") ? "" : "https://order-assistant-worker.loyce.workers.dev";
     const BUILDINGS = {
       "大千苑18栋": ["18-1","18-2","18-3","18-4"],
       "长江苑19栋": ["19-1","19-2","19-3","19-4"],

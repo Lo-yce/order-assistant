@@ -1,6 +1,6 @@
 /* ===== 订单助手 后台逻辑 ===== */
-/* 部署时把 WORKER_BASE 改成你的 Cloudflare Workers 地址 */
-const WORKER_BASE = "https://order-assistant-worker.loyce.workers.dev";
+/* API 地址：EdgeOne Pages 部署时前后端同域走相对路径；GitHub Pages 部署时走 Cloudflare Worker */
+const WORKER_BASE = location.hostname.endsWith("edgeone.app") ? "" : "https://order-assistant-worker.loyce.workers.dev";
 
 const BUILDINGS = {
   "大千苑18栋": ["18-1", "18-2", "18-3", "18-4"],
