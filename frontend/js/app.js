@@ -280,11 +280,12 @@ function renderOrders() {
   const r = parseHash();
   $("#topSub").textContent = r.building ? `${r.building} 订单` : "全部订单";
 
-  // 状态 chips + 区域/楼号筛选
+  // 状态 chips + 区域/楼号筛选 + 自提快捷筛（仅全部订单视图）
   let chips = `<button class="chip all ${state.statusFilter === "all" ? "active" : ""}" onclick="App.setStatusFilter('all')">全部</button>
     <button class="chip ${state.statusFilter === "pending" ? "active" : ""}" onclick="App.setStatusFilter('pending')">待配送</button>
     <button class="chip ${state.statusFilter === "delivering" ? "active" : ""}" onclick="App.setStatusFilter('delivering')">配送中</button>
-    <button class="chip ${state.statusFilter === "done" ? "active" : ""}" onclick="App.setStatusFilter('done')">已完成</button>`;
+    <button class="chip ${state.statusFilter === "done" ? "active" : ""}" onclick="App.setStatusFilter('done')">已完成</button>
+    <button class="chip ${state.statusFilter === "pickup" ? "active" : ""}" onclick="App.setStatusFilter('pickup')"><i class="bi bi-shop"></i> 自提</button>`;
 
   let subChips = "";
   let building = state.building;
@@ -300,7 +301,8 @@ function renderOrders() {
   let orders = state.orders;
   if (building) orders = orders.filter((o) => o.delivery_building === building);
   if (state.sub) orders = orders.filter((o) => o.sub_zone === state.sub);
-  if (state.statusFilter !== "all") orders = orders.filter((o) => o.status === state.statusFilter);
+  if (state.statusFilter === "pickup") orders = orders.filter((o) => o.delivery_method === "self_pickup");
+  else if (state.statusFilter !== "all") orders = orders.filter((o) => o.status === state.statusFilter);
 
   // 排序：尽快优先 → 时间升序 → done 最末
   orders.sort((a, b) => {
@@ -401,6 +403,11 @@ function orderCard(o) {
   const items = o.items.map((it) =>
     `<div class="row"><span>${esc(it.book_name)}</span><span class="qty">×${it.quantity}</span></div>`).join("");
   const time = `<span class="order-time"><i class="bi bi-clock"></i> ${fmtTime(o.deliver_time)}</span>`;
+  // 取书方式：自提显示地点，配送显示苑+楼号（旧数据无字段按配送处理）
+  const isPickup = o.delivery_method === "self_pickup";
+  const place = isPickup
+    ? `<span class="zone"><i class="bi bi-shop"></i> 自提 · ${esc(o.pickup_location || "师生活动中心")}</span>`
+    : `<span class="zone">${esc(o.delivery_building)} ${esc(o.sub_zone)}</span>`;
 
   const actions = `
     <div class="order-actions" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
@@ -412,7 +419,7 @@ function orderCard(o) {
 
   return `<div class="card order-card card-status-${o.status} ${o.status === "done" ? "done" : ""}">
     <div class="order-head">
-      <span class="zone">${esc(o.delivery_building)} ${esc(o.sub_zone)}</span>
+      ${place}
       <span class="tag ${s.cls}">${s.name}</span>
     </div>
     <div class="order-meta">
@@ -475,6 +482,8 @@ function renderForm(order) {
   const building = editing ? order.delivery_building : "";
   const subMap = building ? BUILDINGS[building] : [];
   const sub = editing ? order.sub_zone : "";
+  const isPickup = editing ? order.delivery_method === "self_pickup" : false;
+  const pickup = editing ? (order.pickup_location || "师生活动中心") : "师生活动中心";
 
   let itemRows = "";
   if (editing && order.items.length) {
@@ -486,18 +495,33 @@ function renderForm(order) {
   const html = `
     <div class="card">
       <div class="field">
-        <label>配送区域 <span class="req">*</span></label>
-        <select class="input building" onchange="App.syncZone(this)">
-          <option value="">选择大苑</option>
-          ${Object.keys(BUILDINGS).map((b) => `<option value="${b}" ${b === building ? "selected" : ""}>${b}</option>`).join("")}
-        </select>
+        <label>取书方式 <span class="req">*</span></label>
+        <div class="method-toggle">
+          <button type="button" class="mt-btn ${isPickup ? "" : "active"}" id="formMDelivery" onclick="App.setFormMethod('delivery')"><i class="bi bi-bicycle"></i> 配送到宿舍</button>
+          <button type="button" class="mt-btn ${isPickup ? "active" : ""}" id="formMPickup" onclick="App.setFormMethod('self_pickup')"><i class="bi bi-shop"></i> 到点自提</button>
+        </div>
       </div>
-      <div class="field">
-        <label>楼号 <span class="req">*</span></label>
-        <select class="input zone">
-          <option value="">选择楼号</option>
-          ${subMap.map((z) => `<option value="${z}" ${z === sub ? "selected" : ""}>${z}</option>`).join("")}
-        </select>
+      <div id="formDeliveryFields" style="${isPickup ? "display:none" : ""}">
+        <div class="field">
+          <label>配送区域 <span class="req">*</span></label>
+          <select class="input building" onchange="App.syncZone(this)">
+            <option value="">选择大苑</option>
+            ${Object.keys(BUILDINGS).map((b) => `<option value="${b}" ${b === building ? "selected" : ""}>${b}</option>`).join("")}
+          </select>
+        </div>
+        <div class="field">
+          <label>楼号 <span class="req">*</span></label>
+          <select class="input zone">
+            <option value="">选择楼号</option>
+            ${subMap.map((z) => `<option value="${z}" ${z === sub ? "selected" : ""}>${z}</option>`).join("")}
+          </select>
+        </div>
+      </div>
+      <div id="formPickupFields" style="${isPickup ? "" : "display:none"}">
+        <div class="field">
+          <label>自提地点</label>
+          <input class="input pickup" id="formPickup" value="${esc(pickup)}" placeholder="默认师生活动中心，可修改" />
+        </div>
       </div>
       <div class="form-grid">
         <div class="field">
@@ -523,6 +547,7 @@ function renderForm(order) {
   `;
   $("#formInner").innerHTML = html;
   window._editingId = editing ? order.id : null;
+  window._formMethod = isPickup ? "self_pickup" : "delivery";
   $("#formSaveBtn").onclick = submitForm;
 }
 
@@ -545,6 +570,18 @@ window.App = {
     state.currentTab = "edit";
     navigate("edit", { id });
   },
+  // 表单取书方式切换：配送 ⇄ 自提
+  setFormMethod(m) {
+    window._formMethod = m;
+    const d = document.getElementById("formMDelivery");
+    const p = document.getElementById("formMPickup");
+    if (d) d.classList.toggle("active", m === "delivery");
+    if (p) p.classList.toggle("active", m === "self_pickup");
+    const df = document.getElementById("formDeliveryFields");
+    const pf = document.getElementById("formPickupFields");
+    if (df) df.style.display = m === "delivery" ? "" : "none";
+    if (pf) pf.style.display = m === "self_pickup" ? "" : "none";
+  },
   closePwd,
   submitPwd,
   onBookInput,
@@ -560,8 +597,10 @@ window.App = {
 /* ---------- 提交表单 ---------- */
 async function submitForm() {
   const root = $("#formInner");
+  const method = window._formMethod || "delivery";
   const building = root.querySelector(".building").value;
   const zone = root.querySelector(".zone").value;
+  const pickup = ($("#formPickup").value.trim() || "师生活动中心");
   const time = fromLocalInput(root.querySelector(".time").value);
   const contact = root.querySelector(".contact").value.trim();
   const remark = root.querySelector(".remark").value.trim();
@@ -574,19 +613,20 @@ async function submitForm() {
     if (name && qty >= 1) items.push({ book_name: name, quantity: qty });
   });
 
-  if (!building || !zone) return toast("请选择配送区域和楼号");
+  if (method === "delivery" && (!building || !zone)) return toast("请选择配送区域和楼号");
   if (!contact) return toast("请填写联系方式");
   if (!items.length) return toast("请至少填写一行有效书籍");
 
   const btn = $("#formSaveBtn");
   btn.disabled = true;
   try {
+    const payload = { delivery_method: method, delivery_building: building, sub_zone: zone, pickup_location: pickup, deliver_time: time, contact, remark, items };
     if (window._editingId) {
-      await api(`/api/orders/${window._editingId}`, "PUT", { delivery_building: building, sub_zone: zone, deliver_time: time, contact, remark, items });
+      await api(`/api/orders/${window._editingId}`, "PUT", payload);
       toast("已保存修改");
       navigate("orders");
     } else {
-      await api("/api/orders", "POST", { delivery_building: building, sub_zone: zone, deliver_time: time, contact, remark, items });
+      await api("/api/orders", "POST", payload);
       toast("下单成功");
       // 重置表单方便连续录入
       renderForm(null);
@@ -613,14 +653,15 @@ window.App.setStatus = function (id, status, skipConfirm) {
   const o = state.orders.find((x) => x.id === id);
   const fromName = o ? STATUS[o.status].name : "未知";
   const toName = STATUS[status] ? STATUS[status].name : status;
+  const isPickupOrder = o && o.delivery_method === "self_pickup";
   const texts = {
-    delivering: `确定开始配送该订单吗？`,
-    done: `确定该订单已完成配送吗？完成后订单将置灰并排到列表末尾。`,
+    delivering: isPickupOrder ? `确定开始备货该自提订单吗？` : `确定开始配送该订单吗？`,
+    done: isPickupOrder ? `确定顾客已取到书了吗？完成后订单将置灰并排到列表末尾。` : `确定该订单已完成配送吗？完成后订单将置灰并排到列表末尾。`,
     pending: `确定把该订单退回「待配送」状态吗？`,
   };
   confirmModal(
     `状态切换：${fromName} → ${toName}`,
-    `订单 #${id}（${o ? esc(o.delivery_building) + " " + esc(o.sub_zone) : ""}）\n${texts[status] || ""}`,
+    `订单 #${id}（${o ? (o.delivery_method === "self_pickup" ? "自提 · " + esc(o.pickup_location || "师生活动中心") : esc(o.delivery_building) + " " + esc(o.sub_zone)) : ""}）\n${texts[status] || ""}`,
     doChange
   );
 };
@@ -992,11 +1033,30 @@ window.App.shareWantedLink = async function () {
 window.App.exportManifest = function () {
   const active = state.orders.filter((o) => o.status !== "done");
   if (!active.length) { toast("当前没有待配送订单"); return; }
+  // 自提单独立分组，配送单按大苑分组
+  const pickups = active.filter((o) => o.delivery_method === "self_pickup");
+  const deliveries = active.filter((o) => o.delivery_method !== "self_pickup");
   const byB = {};
-  active.forEach((o) => (byB[o.delivery_building] = byB[o.delivery_building] || []).push(o));
+  deliveries.forEach((o) => (byB[o.delivery_building] = byB[o.delivery_building] || []).push(o));
 
   let html = '<h2 style="text-align:center">配送清单</h2>' +
     `<p style="text-align:center;color:var(--muted)">${new Date().toLocaleString("zh-CN")} · 共 ${active.length} 单</p>`;
+  if (pickups.length) {
+    // 按自提地点分组
+    const byP = {};
+    pickups.forEach((o) => (byP[o.pickup_location || "师生活动中心"] = byP[o.pickup_location || "师生活动中心"] || []).push(o));
+    for (const loc of Object.keys(byP)) {
+      html += `<div class="building-zone">自提 · ${esc(loc)}（${byP[loc].length} 单）</div>`;
+      for (const o of byP[loc]) {
+        const items = o.items.map((it) => `${it.book_name} ×${it.quantity}`).join("、");
+        html += `<div class="card" style="box-shadow:none">
+          <div><b>#${o.id}</b> · ${fmtTime(o.deliver_time)} · ${esc(o.contact)}</div>
+          <div class="order-meta">${esc(items)}</div>
+          ${o.remark ? `<div class="order-meta">备注：${esc(o.remark)}</div>` : ""}
+        </div>`;
+      }
+    }
+  }
   for (const b of Object.keys(byB)) {
     html += `<div class="building-zone">${b}（${byB[b].length} 单）</div>`;
     for (const o of byB[b]) {

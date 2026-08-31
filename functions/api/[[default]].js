@@ -13,6 +13,8 @@
 const BUILDINGS = ['大千苑18栋', '长江苑19栋', '大洲苑21栋', '培伦苑20栋'];
 const STATUSES = ['pending', 'delivering', 'done'];
 const WANTED_STATUSES = ['open', 'found'];
+const METHODS = ['delivery', 'self_pickup']; // 配送 / 自提
+const DEFAULT_PICKUP = '师生活动中心';
 
 function validSubZone(building, sub) {
   const map = {
@@ -198,11 +200,14 @@ async function createOrder(body) {
   const list = await load('orders');
   const seq = await load('seq');
   const id = seq.order++;
+  const method = normMethod(body);
 
   const order = {
     id,
-    delivery_building: body.delivery_building,
-    sub_zone: body.sub_zone,
+    delivery_method: method,
+    delivery_building: method === 'delivery' ? body.delivery_building : '',
+    sub_zone: method === 'delivery' ? body.sub_zone : '',
+    pickup_location: method === 'self_pickup' ? String(body.pickup_location || DEFAULT_PICKUP).trim() : '',
     deliver_time: body.deliver_time || null,
     contact: body.contact || '',
     remark: body.remark || '',
@@ -225,10 +230,13 @@ async function updateOrder(id, body) {
   if (idx < 0) return json({ ok: false, error: 'Not Found' }, 404);
 
   const seq = await load('seq');
+  const method = normMethod(body);
   list[idx] = {
     ...list[idx],
-    delivery_building: body.delivery_building,
-    sub_zone: body.sub_zone,
+    delivery_method: method,
+    delivery_building: method === 'delivery' ? body.delivery_building : '',
+    sub_zone: method === 'delivery' ? body.sub_zone : '',
+    pickup_location: method === 'self_pickup' ? String(body.pickup_location || DEFAULT_PICKUP).trim() : '',
     deliver_time: body.deliver_time || null,
     contact: body.contact || '',
     remark: body.remark || '',
@@ -349,8 +357,8 @@ async function getMyOrders(url) {
     .sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
     .slice(0, 20)
     .map((o) => ({
-      id: o.id, delivery_building: o.delivery_building, sub_zone: o.sub_zone,
-      deliver_time: o.deliver_time, status: o.status, created_at: o.created_at,
+      id: o.id, delivery_method: o.delivery_method, delivery_building: o.delivery_building, sub_zone: o.sub_zone,
+      pickup_location: o.pickup_location, deliver_time: o.deliver_time, status: o.status, created_at: o.created_at,
       items: (o.items || []).map((it) => ({ book_name: it.book_name, quantity: it.quantity })),
     }));
   return json({ ok: true, data: list });
@@ -479,10 +487,21 @@ function validateWanted(body) {
   return null;
 }
 
+// 配送方式归一：缺省按 delivery（兼容旧数据/旧客户端）
+function normMethod(body) {
+  const m = body && body.delivery_method;
+  return m === 'self_pickup' ? 'self_pickup' : 'delivery';
+}
+
 function validateOrder(body) {
   if (!body || typeof body !== 'object') return '请求体缺失';
-  if (!BUILDINGS.includes(body.delivery_building)) return '无效的大苑';
-  if (!validSubZone(body.delivery_building, body.sub_zone)) return '无效的编号';
+  if (normMethod(body) === 'self_pickup') {
+    // 自提：不需要大苑/楼号；自提地点可改，为空则默认
+    if (body.pickup_location && !String(body.pickup_location).trim()) return '自提地点无效';
+  } else {
+    if (!BUILDINGS.includes(body.delivery_building)) return '无效的大苑';
+    if (!validSubZone(body.delivery_building, body.sub_zone)) return '无效的编号';
+  }
   if (!body.contact || !String(body.contact).trim()) return '请填写联系方式';
   if (!Array.isArray(body.items) || body.items.length === 0) return '请至少添加一行书';
   for (const it of body.items) {

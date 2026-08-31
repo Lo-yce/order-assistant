@@ -6,6 +6,8 @@
  */
 const BUILDINGS = ['大千苑18栋', '长江苑19栋', '大洲苑21栋', '培伦苑20栋'];
 const STATUSES = ['pending', 'delivering', 'done'];
+const METHODS = ['delivery', 'self_pickup']; // 配送 / 自提
+const DEFAULT_PICKUP = '师生活动中心';
 
 // 校验区域编号合法性：仅允许各苑对应的 4 个编号
 function validSubZone(building, sub) {
@@ -193,10 +195,11 @@ async function createOrder(db, body) {
   const err = validateOrder(body);
   if (err) return json({ ok: false, error: err }, 400);
 
+  const method = normMethod(body);
   const now = new Date().toISOString();
   const t = db.prepare(
-    'INSERT INTO orders (delivery_building, sub_zone, deliver_time, contact, remark, status, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)'
-  ).bind(body.delivery_building, body.sub_zone, body.deliver_time || null, body.contact || '', body.remark || '', 'pending', now, now);
+    'INSERT INTO orders (delivery_method, delivery_building, sub_zone, pickup_location, deliver_time, contact, remark, status, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)'
+  ).bind(method, method === 'delivery' ? body.delivery_building : '', method === 'delivery' ? body.sub_zone : '', method === 'self_pickup' ? String(body.pickup_location || DEFAULT_PICKUP).trim() : '', body.deliver_time || null, body.contact || '', body.remark || '', 'pending', now, now);
   const res = await t.run();
 
   await insertItems(db, res.meta.last_row_id, body.items);
@@ -209,10 +212,11 @@ async function updateOrder(db, id, body) {
   const found = await db.prepare('SELECT id FROM orders WHERE id = ?').bind(id).first();
   if (!found) return json({ ok: false, error: 'Not Found' }, 404);
 
+  const method = normMethod(body);
   const now = new Date().toISOString();
   await db.prepare(
-    'UPDATE orders SET delivery_building=?, sub_zone=?, deliver_time=?, contact=?, remark=?, updated_at=? WHERE id=?'
-  ).bind(body.delivery_building, body.sub_zone, body.deliver_time || null, body.contact || '', body.remark || '', now, id).run();
+    'UPDATE orders SET delivery_method=?, delivery_building=?, sub_zone=?, pickup_location=?, deliver_time=?, contact=?, remark=?, updated_at=? WHERE id=?'
+  ).bind(method, method === 'delivery' ? body.delivery_building : '', method === 'delivery' ? body.sub_zone : '', method === 'self_pickup' ? String(body.pickup_location || DEFAULT_PICKUP).trim() : '', body.deliver_time || null, body.contact || '', body.remark || '', now, id).run();
 
   await db.prepare('DELETE FROM order_items WHERE order_id = ?').bind(id).run();
   await insertItems(db, id, body.items);
@@ -323,7 +327,7 @@ async function getMyOrders(db, url) {
   const contact = (url.searchParams.get('contact') || '').trim();
   if (!contact) return json({ ok: false, error: '请填写下单时的联系方式' }, 400);
   const { results: orders } = await db.prepare(
-    `SELECT id, delivery_building, sub_zone, deliver_time, status, created_at FROM orders
+    `SELECT id, delivery_method, delivery_building, sub_zone, pickup_location, deliver_time, status, created_at FROM orders
      WHERE contact = ? ORDER BY created_at DESC LIMIT 20`
   ).bind(contact).all();
   const { results: items } = await db.prepare('SELECT * FROM order_items').all();
@@ -416,10 +420,21 @@ async function createWantedPublic(db, body) {
   return json({ ok: true, data: { id: Number(res.meta.last_row_id) } });
 }
 
+// 配送方式归一：缺省按 delivery（兼容旧数据/旧客户端）
+function normMethod(body) {
+  const m = body && body.delivery_method;
+  return m === 'self_pickup' ? 'self_pickup' : 'delivery';
+}
+
 function validateOrder(body) {
   if (!body || typeof body !== 'object') return '请求体缺失';
-  if (!BUILDINGS.includes(body.delivery_building)) return '无效的大苑';
-  if (!validSubZone(body.delivery_building, body.sub_zone)) return '无效的编号';
+  if (normMethod(body) === 'self_pickup') {
+    // 自提：不需要大苑/楼号；自提地点可改，为空则默认
+    if (body.pickup_location && !String(body.pickup_location).trim()) return '自提地点无效';
+  } else {
+    if (!BUILDINGS.includes(body.delivery_building)) return '无效的大苑';
+    if (!validSubZone(body.delivery_building, body.sub_zone)) return '无效的编号';
+  }
   if (!body.contact || !String(body.contact).trim()) return '请填写联系方式';
   if (!Array.isArray(body.items) || body.items.length === 0) return '请至少添加一行书';
   for (const it of body.items) {
