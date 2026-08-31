@@ -101,6 +101,13 @@ export default {
       // 查我的订单（顾客按联系方式）
       if (p === '/api/my-orders' && method === 'GET') return await getMyOrders(db, url);
 
+      // 需求书单（求书登记：有人需要但还没找到的书）
+      if (p === '/api/wanted' && method === 'GET') return await getWanted(db, url);
+      if (p === '/api/wanted' && method === 'POST') {
+        const body = await readBody(request);
+        return await createWanted(db, body);
+      }
+
       // 状态更新 /api/orders/:id/status
       let m = p.match(/^\/api\/orders\/(\d+)\/status$/);
       if (m && method === 'PATCH') {
@@ -118,6 +125,24 @@ export default {
           return await updateOrder(db, id, body);
         }
         if (method === 'DELETE') return await delOrder(db, id);
+      }
+
+      // 需求书单状态 /api/wanted/:id/status
+      m = p.match(/^\/api\/wanted\/(\d+)\/status$/);
+      if (m && method === 'PATCH') {
+        const body = await readBody(request);
+        return await updateWantedStatus(db, Number(m[1]), body);
+      }
+
+      // 单条求书 /api/wanted/:id
+      m = p.match(/^\/api\/wanted\/(\d+)$/);
+      if (m) {
+        const id = Number(m[1]);
+        if (method === 'PUT') {
+          const body = await readBody(request);
+          return await updateWanted(db, id, body);
+        }
+        if (method === 'DELETE') return await delWanted(db, id);
       }
 
       return json({ ok: false, error: 'Not Found' }, 404);
@@ -301,6 +326,66 @@ async function insertItems(db, orderId, items) {
   for (const it of items) {
     await stmt.bind(orderId, it.book_name.trim(), Number(it.quantity)).run();
   }
+}
+
+// ===== 需求书单（求书登记） =====
+const WANTED_STATUSES = ['open', 'found'];
+
+async function getWanted(db, url) {
+  const status = url.searchParams.get('status');
+  const where = status ? 'WHERE status = ?' : '';
+  const binds = status ? [status] : [];
+  // 待找到在前（先登的先找），已找到排后
+  const { results } = await db.prepare(
+    `SELECT * FROM wanted_books ${where}
+     ORDER BY (status='found') ASC, created_at ASC`
+  ).bind(...binds).all();
+  return json({ ok: true, data: results });
+}
+
+async function createWanted(db, body) {
+  const err = validateWanted(body);
+  if (err) return json({ ok: false, error: err }, 400);
+  const now = new Date().toISOString();
+  const res = await db.prepare(
+    'INSERT INTO wanted_books (book_name, quantity, contact, remark, status, created_at, updated_at) VALUES (?,?,?,?,?,?,?)'
+  ).bind(String(body.book_name).trim(), Number(body.quantity), body.contact || '', body.remark || '', 'open', now, now).run();
+  return json({ ok: true, data: { id: Number(res.meta.last_row_id) } });
+}
+
+async function updateWanted(db, id, body) {
+  const err = validateWanted(body);
+  if (err) return json({ ok: false, error: err }, 400);
+  const found = await db.prepare('SELECT id FROM wanted_books WHERE id = ?').bind(id).first();
+  if (!found) return json({ ok: false, error: 'Not Found' }, 404);
+  const now = new Date().toISOString();
+  await db.prepare(
+    'UPDATE wanted_books SET book_name=?, quantity=?, contact=?, remark=?, updated_at=? WHERE id=?'
+  ).bind(String(body.book_name).trim(), Number(body.quantity), body.contact || '', body.remark || '', now, id).run();
+  return json({ ok: true, data: { id } });
+}
+
+async function updateWantedStatus(db, id, body) {
+  if (!WANTED_STATUSES.includes(body.status)) return json({ ok: false, error: '无效状态' }, 400);
+  const found = await db.prepare('SELECT id FROM wanted_books WHERE id = ?').bind(id).first();
+  if (!found) return json({ ok: false, error: 'Not Found' }, 404);
+  const now = new Date().toISOString();
+  await db.prepare('UPDATE wanted_books SET status=?, updated_at=? WHERE id=?').bind(body.status, now, id).run();
+  return json({ ok: true, data: { id, status: body.status } });
+}
+
+async function delWanted(db, id) {
+  const found = await db.prepare('SELECT id FROM wanted_books WHERE id = ?').bind(id).first();
+  if (!found) return json({ ok: false, error: 'Not Found' }, 404);
+  await db.prepare('DELETE FROM wanted_books WHERE id = ?').bind(id).run();
+  return json({ ok: true, data: { id } });
+}
+
+function validateWanted(body) {
+  if (!body || typeof body !== 'object') return '请求体缺失';
+  if (!body.book_name || !String(body.book_name).trim()) return '书名为空';
+  if (!Number.isInteger(Number(body.quantity)) || Number(body.quantity) < 1) return '数量需为≥1的整数';
+  return null;
 }
 
 function validateOrder(body) {

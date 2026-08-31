@@ -52,6 +52,17 @@
       <div id="statsInner"></div>
     </section>
 
+    <!-- 求书登记（有人需要但还没找到的书） -->
+    <section class="page" id="page-wanted">
+      <div class="toolbar no-print">
+        <input class="input" id="wantedSearch" placeholder="模糊搜索，如：高数" style="flex:1;min-width:120px" oninput="App.renderWanted()" />
+        <button class="btn ghost sm" onclick="App.loadWanted()" title="刷新"><i class="bi bi-arrow-clockwise"></i></button>
+        <button class="btn primary sm" onclick="App.openWantedModal()"><i class="bi bi-plus-lg"></i> 登记求书</button>
+      </div>
+      <div class="chips" id="wantedChips"></div>
+      <div id="wantedInner"></div>
+    </section>
+
     <!-- 历史订单 -->
     <section class="page" id="page-history">
       <button class="btn danger no-print" onclick="App.clearDone()"><i class="bi bi-trash3"></i> 清空已完成订单</button>
@@ -64,10 +75,11 @@
     <a href="#/orders" data-tab="orders"><i class="bi bi-list-check"></i>订单列表</a>
     <a href="#/new" data-tab="new"><i class="bi bi-plus-circle"></i>新建订单</a>
     <a href="#/stats" data-tab="stats"><i class="bi bi-bar-chart"></i>统计</a>
+    <a href="#/wanted" data-tab="wanted"><i class="bi bi-bookmark-heart"></i>求书<span class="nav-dot"></span></a>
     <a href="#/history" data-tab="history"><i class="bi bi-clock-history"></i>历史</a>
   </nav>
   <style>
-    /* 底部导航红点：有待配送订单时提示 */
+    /* 底部导航红点：有待配送订单 / 有待找到求书时提示 */
     .nav a { position: relative; }
     .nav a .nav-dot {
       position: absolute;
@@ -78,6 +90,7 @@
       display: none;
     }
     .nav a.has-pending .nav-dot { display: block; }
+    .nav a.has-open .nav-dot { display: block; }
   </style>
 
   <div class="toast" id="toast"></div>
@@ -120,6 +133,40 @@
       <div class="btns" style="margin-top:14px">
         <button class="btn ghost" onclick="App.closeInvEdit()">取消</button>
         <button class="btn primary" onclick="App.saveInvEdit()">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 求书登记弹窗 -->
+  <div class="modal-mask" id="wantedMask">
+    <div class="modal">
+      <h3 id="wantedModalTitle">登记求书</h3>
+      <p>登记大家需要但还没找到的书，找到后可直接入库。</p>
+      <div class="field" style="margin-bottom:10px">
+        <label>书名 <span class="req">*</span></label>
+        <div class="book-suggest" style="position:relative">
+          <input class="input" id="wantedName" placeholder="书名（支持模糊搜索）" autocomplete="off"
+            oninput="App.onBookInput(this)" onfocus="App.onBookInput(this)" onblur="App.hideBookSuggest(this)" />
+          <div class="book-suggest-list"></div>
+        </div>
+      </div>
+      <div class="form-grid" style="margin-bottom:10px">
+        <div class="field" style="margin-bottom:0">
+          <label>需要数量</label>
+          <input class="input" id="wantedQty" type="number" min="1" step="1" value="1" />
+        </div>
+        <div class="field" style="margin-bottom:0">
+          <label>谁需要（选填）</label>
+          <input class="input" id="wantedContact" placeholder="称呼 / 联系方式" />
+        </div>
+      </div>
+      <div class="field" style="margin-bottom:0">
+        <label>备注（选填）</label>
+        <input class="input" id="wantedRemark" placeholder="如：作者 / 版本 / 品相要求" />
+      </div>
+      <div class="btns" style="margin-top:14px">
+        <button class="btn ghost" onclick="App.closeWantedModal()">取消</button>
+        <button class="btn primary" onclick="App.submitWanted()">保存</button>
       </div>
     </div>
   </div>

@@ -25,6 +25,8 @@ const state = {
   bookNames: [],
   stats: [],
   statsBuilding: "", // 统计 Tab 按苑筛选（"" = 全部）
+  wanted: [],        // 求书登记列表
+  wantedFilter: "open", // open=待找到 / found=已找到 / all
   currentTab: "dashboard",
   building: null, // 区域配送进入时的苑过滤
   sub: null,      // 楼号过滤
@@ -43,6 +45,14 @@ function fmtTime(iso) {
   const sameDay = d.toDateString() === today.toDateString();
   return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}` +
     (sameDay ? "（今天）" : "");
+}
+
+function fmtDate(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d)) return iso;
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
 function toLocalInput(iso) {
@@ -125,6 +135,10 @@ async function loadStats() {
     App.renderStats();
   } catch (e) { toast(e.message); }
 }
+async function loadWanted() {
+  try { state.wanted = await api("/api/wanted"); } catch (e) {}
+  updateWantedDot(); // 求书变化后同步底部导航红点
+}
 
 /* ---------- Toast ---------- */
 let toastTimer;
@@ -163,6 +177,7 @@ function parseHash() {
   else if (path.startsWith("/new")) tab = "new";
   else if (path.startsWith("/edit")) tab = "edit";
   else if (path.startsWith("/stats")) tab = "stats";
+  else if (path.startsWith("/wanted")) tab = "wanted";
   else if (path.startsWith("/history")) tab = "history";
   return {
     tab,
@@ -191,11 +206,12 @@ window.addEventListener("hashchange", setNavActive);
 /* ---------- 导航激活 ---------- */
 function setNavActive() {
   const r = parseHash();
-  const map = { dashboard: "dashboard", orders: "orders", new: "new", edit: "new", stats: "stats", history: "history" };
+  const map = { dashboard: "dashboard", orders: "orders", new: "new", edit: "new", stats: "stats", wanted: "wanted", history: "history" };
   document.querySelectorAll(".nav a").forEach((a) => {
     a.classList.toggle("active", a.dataset.tab === map[r.tab]);
   });
   updateNavDot();
+  updateWantedDot();
 }
 
 /* 底部导航「区域配送」红点：存在待配送订单时亮起 */
@@ -203,6 +219,13 @@ function updateNavDot() {
   const hasPending = state.orders.some((o) => o.status === "pending");
   const tab = document.querySelector('.nav a[data-tab="dashboard"]');
   if (tab) tab.classList.toggle("has-pending", hasPending);
+}
+
+/* 底部导航「求书」红点：存在待找到的求书时亮起 */
+function updateWantedDot() {
+  const hasOpen = state.wanted.some((w) => w.status === "open");
+  const tab = document.querySelector('.nav a[data-tab="wanted"]');
+  if (tab) tab.classList.toggle("has-open", hasOpen);
 }
 
 /* ---------- 渲染入口 ---------- */
@@ -226,6 +249,7 @@ function render() {
     return;
   }
   if (r.tab === "stats") { showPage("stats"); loadStats(); return; }
+  if (r.tab === "wanted") { showPage("wanted"); renderWanted(); return; }
   if (r.tab === "history") { showPage("history"); renderHistory(); return; }
 }
 function showPage(id) { $("#page-" + id).classList.add("active"); }
@@ -701,6 +725,7 @@ window.App.invEditStep = function (d) {
 };
 window.App.closeInvEdit = function () {
   $("#invEditMask").classList.remove("show");
+  window._invEditWantedId = null; // 取消时不同步求书状态
 };
 window.App.saveInvEdit = async function () {
   const name = window._invEditName;
@@ -710,7 +735,17 @@ window.App.saveInvEdit = async function () {
   try {
     await api("/api/inventory", "POST", { items: [{ book_name: name, stock: v }] });
     $("#invEditMask").classList.remove("show");
-    toast(`「${name}」库存已设为 ${v}`);
+    // 从求书页「找到了，入库」进入：保存库存后把该求书标记为已找到
+    const wantedId = window._invEditWantedId;
+    window._invEditWantedId = null;
+    if (wantedId) {
+      try { await api(`/api/wanted/${wantedId}/status`, "PATCH", { status: "found" }); } catch (e) {}
+      await loadWanted();
+      if (state.currentTab === "wanted") renderWanted();
+      toast(`「${name}」已入库 ${v} 本并标记为已找到`);
+    } else {
+      toast(`「${name}」库存已设为 ${v}`);
+    }
     loadStats();
   } catch (e) { toast(e.message); }
 };
@@ -775,6 +810,132 @@ window.App.importInventory = async function (input) {
   }
 };
 
+/* ---------- 求书登记（未找到但有人需要的书） ---------- */
+window.App.loadWanted = async function () {
+  await loadWanted();
+  if (state.currentTab === "wanted") renderWanted();
+};
+
+function renderWanted() {
+  $("#topSub").textContent = "求书登记（需要但未找到的书）";
+  const openN = state.wanted.filter((w) => w.status === "open").length;
+  const foundN = state.wanted.length - openN;
+  $("#wantedChips").innerHTML = `
+    <button class="chip ${state.wantedFilter === "open" ? "active" : ""}" onclick="App.setWantedFilter('open')">待找到${openN ? ` (${openN})` : ""}</button>
+    <button class="chip ${state.wantedFilter === "found" ? "active" : ""}" onclick="App.setWantedFilter('found')">已找到${foundN ? ` (${foundN})` : ""}</button>
+    <button class="chip all ${state.wantedFilter === "all" ? "active" : ""}" onclick="App.setWantedFilter('all')">全部</button>`;
+  const kw = ($("#wantedSearch").value || "").trim();
+  let list = state.wanted.filter((w) => state.wantedFilter === "all" || w.status === state.wantedFilter);
+  if (kw) list = list.filter((w) => fuzzyMatchBook(w.book_name, kw));
+  $("#wantedInner").innerHTML = list.length ? list.map(wantedCard).join("") : '<div class="empty">暂无求书登记</div>';
+}
+window.App.renderWanted = renderWanted;
+window.App.setWantedFilter = function (f) { state.wantedFilter = f; renderWanted(); };
+
+function wantedCard(w) {
+  const isOpen = w.status === "open";
+  return `<div class="card wanted-card ${isOpen ? "open" : "found"}">
+    <div class="order-head">
+      <span class="zone">${esc(w.book_name)}</span>
+      <span class="tag ${isOpen ? "pending" : "done"}">${isOpen ? "待找到" : "已找到"}</span>
+    </div>
+    <div class="order-meta">
+      需要 <b style="color:var(--pri)">${w.quantity}</b> 本
+      ${w.remark ? ` · ${esc(w.remark)}` : ""}
+      <br><i class="bi bi-person"></i> ${esc(w.contact || "未留联系方式")}
+      <span style="margin-left:10px"><i class="bi bi-clock"></i> ${fmtDate(w.created_at)}</span>
+    </div>
+    <div class="order-actions">
+      ${isOpen ? `
+        <button class="btn primary sm" onclick="App.foundWanted(${w.id})"><i class="bi bi-book-half"></i> 找到了，入库</button>
+        <button class="btn ghost sm" onclick="App.editWanted(${w.id})"><i class="bi bi-pencil"></i> 编辑</button>` : `
+        <button class="btn ghost sm" onclick="App.reopenWanted(${w.id})"><i class="bi bi-arrow-counterclockwise"></i> 恢复待找</button>`}
+      <button class="btn ghost sm" onclick="App.delWanted(${w.id})"><i class="bi bi-trash3"></i> 删除</button>
+    </div>
+  </div>`;
+}
+
+window.App.openWantedModal = function () {
+  window._editingWantedId = null;
+  $("#wantedModalTitle").textContent = "登记求书";
+  $("#wantedName").value = "";
+  $("#wantedQty").value = 1;
+  $("#wantedContact").value = "";
+  $("#wantedRemark").value = "";
+  $("#wantedMask").classList.add("show");
+  setTimeout(() => { try { $("#wantedName").focus(); } catch (e) {} }, 60);
+};
+window.App.closeWantedModal = function () {
+  $("#wantedMask").classList.remove("show");
+};
+window.App.editWanted = function (id) {
+  const w = state.wanted.find((x) => x.id === id);
+  if (!w) return;
+  window._editingWantedId = id;
+  $("#wantedModalTitle").textContent = "编辑求书";
+  $("#wantedName").value = w.book_name;
+  $("#wantedQty").value = w.quantity;
+  $("#wantedContact").value = w.contact || "";
+  $("#wantedRemark").value = w.remark || "";
+  $("#wantedMask").classList.add("show");
+};
+window.App.submitWanted = async function () {
+  const name = $("#wantedName").value.trim();
+  const qty = parseInt($("#wantedQty").value, 10);
+  const contact = $("#wantedContact").value.trim();
+  const remark = $("#wantedRemark").value.trim();
+  if (!name) return toast("请填写书名");
+  if (!Number.isInteger(qty) || qty < 1) return toast("数量需为≥1的整数");
+  try {
+    if (window._editingWantedId) {
+      await api(`/api/wanted/${window._editingWantedId}`, "PUT", { book_name: name, quantity: qty, contact, remark });
+      toast("已保存修改");
+    } else {
+      await api("/api/wanted", "POST", { book_name: name, quantity: qty, contact, remark });
+      toast("已登记求书");
+    }
+    window.App.closeWantedModal();
+    await loadWanted();
+    if (state.currentTab === "wanted") renderWanted();
+  } catch (e) { toast(e.message); }
+};
+window.App.delWanted = function (id) {
+  confirmModal("删除求书", "确定删除该求书记录吗？删除后不可恢复。", async () => {
+    try {
+      await api(`/api/wanted/${id}`, "DELETE");
+      await loadWanted();
+      if (state.currentTab === "wanted") renderWanted();
+      toast("已删除");
+    } catch (e) { toast(e.message); }
+  });
+};
+// 找到了：复用库存编辑弹窗，保存库存后自动标记为已找到
+window.App.foundWanted = function (id) {
+  const w = state.wanted.find((x) => x.id === id);
+  if (!w) return;
+  window._invEditWantedId = id;
+  const cur = state.stats.find((s) => s.book_name === w.book_name);
+  window.App.editStock(w.book_name, cur && cur.stock != null ? cur.stock : 0);
+};
+window.App.reopenWanted = function (id) {
+  confirmModal("恢复待找", "确定把该书恢复为「待找到」吗？", async () => {
+    try {
+      await api(`/api/wanted/${id}/status`, "PATCH", { status: "open" });
+      await loadWanted();
+      if (state.currentTab === "wanted") renderWanted();
+      toast("已恢复为待找到");
+    } catch (e) { toast(e.message); }
+  });
+};
+// 求书弹窗：回车保存
+(() => {
+  const ids = ["wantedName", "wantedQty", "wantedContact", "wantedRemark"];
+  for (const id of ids) {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener("keydown", (e) => { if (e.key === "Enter") window.App.submitWanted(); });
+  }
+})();
+
 /* ---------- 历史订单 ---------- */
 function renderHistory() {
   $("#topSub").textContent = "历史订单（已完成）";
@@ -834,11 +995,11 @@ window.App.exportManifest = function () {
 
 /* ---------- 启动 ---------- */
 async function init() {
-  await Promise.all([loadOrders(), loadBookNames()]);
+  await Promise.all([loadOrders(), loadBookNames(), loadWanted()]);
   render();
   // 每 4 秒静默轮询
   setInterval(async () => {
-    await Promise.all([loadOrders(), loadBookNames()]);
+    await Promise.all([loadOrders(), loadBookNames(), loadWanted()]);
     // 正在编辑表单时不打断重绘
     if (state.currentTab === "new" || state.currentTab === "edit") return;
     render();

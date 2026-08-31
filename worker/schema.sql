@@ -30,3 +30,17 @@ CREATE TABLE IF NOT EXISTS inventory (
   stock INTEGER NOT NULL DEFAULT 0,
   updated_at TEXT NOT NULL
 );
+
+-- 需求书单（有人需要但还没找到的书；找到入库后标记 found）
+CREATE TABLE IF NOT EXISTS wanted_books (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  book_name TEXT NOT NULL,
+  quantity INTEGER NOT NULL DEFAULT 1,
+  contact TEXT DEFAULT '',
+  remark TEXT DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'open',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_wanted_status ON wanted_books(status);
