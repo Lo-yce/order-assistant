@@ -177,7 +177,8 @@ async function getOrders(db, url) {
   // 排序（配送路线友好）：进行中在前；待配送>配送中；同苑聚合+楼号自然序；尽快优先；自提最后
   const where = status ? 'WHERE status = ?' : '';
   const binds = status ? [status] : [];
-  // 楼号自然序（"18-2" → 18, 2）：自提/空楼号统一 99999 不参与排序（已被自提分组隔开）
+  // 楼号自然序（"18-2" → 18, 2）：自提/空楼号统一 99999（已被自提分组隔开）
+  // 苑内时间优先：尽快(空时间)在前 → 时间升序 → 同时间才按楼号
   const sql = `SELECT *,
              CASE WHEN sub_zone = '' OR sub_zone IS NULL THEN 99999 ELSE CAST(substr(sub_zone, 1, instr(sub_zone, '-') - 1) AS INTEGER) END AS _b,
              CASE WHEN sub_zone = '' OR sub_zone IS NULL THEN 99999 ELSE CAST(replace(substr(sub_zone, instr(sub_zone, '-') + 1), '-', '') AS INTEGER) END AS _u
@@ -186,9 +187,9 @@ async function getOrders(db, url) {
              CASE status WHEN 'pending' THEN 0 WHEN 'delivering' THEN 1 ELSE 2 END ASC,
              CASE WHEN delivery_method = 'self_pickup' THEN 1 ELSE 0 END ASC,
              CASE delivery_building WHEN '大千苑18栋' THEN 0 WHEN '长江苑19栋' THEN 1 WHEN '大洲苑21栋' THEN 2 WHEN '培伦苑20栋' THEN 3 ELSE 4 END ASC,
-             _b ASC, _u ASC,
              (deliver_time IS NULL OR deliver_time='') DESC,
-             deliver_time ASC`;
+             deliver_time ASC,
+             _b ASC, _u ASC`;
   const { results: orders } = await db.prepare(sql).bind(...binds).all();
   const { results: items } = await db.prepare('SELECT * FROM order_items').all();
   const byOrder = {};

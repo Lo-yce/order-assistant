@@ -311,12 +311,13 @@ function renderOrders() {
   if (state.statusFilter === "pickup") orders = orders.filter((o) => o.delivery_method === "self_pickup");
   else if (state.statusFilter !== "all") orders = orders.filter((o) => o.status === state.statusFilter);
 
-  // 排序（配送路线友好）：
+  // 排序（配送路线 + 时效兼顾）：
   // 1. 进行中的在前，已完成/已取消最末
   // 2. 待配送 > 配送中（先看到要送的）
-  // 3. 同苑聚合 + 楼号自然序（18-1 < 18-2 …，不出现 19-1 夹在 18 栋中间）
-  // 4. 尽快(无时间) > 指定时间早的在前
-  // 5. 自提单按地点排最后（等顾客上门，不参与跑楼）
+  // 3. 配送单在前，自提单最后（等顾客上门，不参与跑楼）
+  // 4. 同苑聚合（大千→长江→大洲→培伦）
+  // 5. 苑内时间优先：尽快的在前 → 预定时间早的在前
+  // 6. 同时间再按楼号自然序（18-1 < 18-2 …）
   orders.sort((a, b) => {
     const ended = (o) => o.status === "done" || o.status === "cancelled";
     if (ended(a) !== ended(b)) return ended(a) ? 1 : -1;
@@ -327,23 +328,26 @@ function renderOrders() {
     const pickRank = (o) => (o.delivery_method === "self_pickup" ? 1 : 0);
     if (pickRank(a) !== pickRank(b)) return pickRank(a) - pickRank(b);
 
+    if (!building) {
+      const bc = BUILDING_ORDER.indexOf(a.delivery_building) - BUILDING_ORDER.indexOf(b.delivery_building);
+      if (bc !== 0) return bc;
+    }
+
+    // 苑内时间优先：尽快 > 早的预定时间；同时间才看楼号
+    if (!a.deliver_time && b.deliver_time) return -1;
+    if (a.deliver_time && !b.deliver_time) return 1;
+    const tc = String(a.deliver_time || "").localeCompare(String(b.deliver_time || ""));
+    if (tc !== 0) return tc;
+
     // 楼号自然序：18-2 → 苑名 "18"、号 2
     const subKey = (o) => {
       const m = String(o.sub_zone || "").match(/(\d+)-(\d+)/);
       if (!m) return [9999, 9999];
       return [Number(m[1]), Number(m[2])];
     };
-    if (!building) {
-      const bc = BUILDING_ORDER.indexOf(a.delivery_building) - BUILDING_ORDER.indexOf(b.delivery_building);
-      if (bc !== 0) return bc;
-    }
     const [ab, au] = subKey(a), [bb, bu] = subKey(b);
     if (ab !== bb) return ab - bb;
-    if (au !== bu) return au - bu;
-
-    if (!a.deliver_time && b.deliver_time) return -1;
-    if (a.deliver_time && !b.deliver_time) return 1;
-    return String(a.deliver_time).localeCompare(String(b.deliver_time));
+    return au - bu;
   });
 
   $("#orderList").innerHTML = orders.length ? orders.map(orderCard).join("") : '<div class="empty">暂无订单</div>';

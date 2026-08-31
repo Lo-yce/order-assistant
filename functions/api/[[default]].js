@@ -173,8 +173,9 @@ export async function onRequest({ request, env }) {
   }
 }
 
-/* ---------- 排序（配送路线友好）----------
- * 进行中在前；待配送 > 配送中；同苑聚合 + 楼号自然序；尽快优先；自提排最后 */
+/* ---------- 排序（配送路线 + 时效兼顾）----------
+ * 进行中在前；待配送 > 配送中；配送单在前自提最后；同苑聚合；
+ * 苑内时间优先（尽快 > 预定时间早的）；同时间才按楼号自然序 */
 const BUILDING_ORDER = ['大千苑18栋', '长江苑19栋', '大洲苑21栋', '培伦苑20栋'];
 
 function subKey(o) {
@@ -196,13 +197,16 @@ function sortOrders(list) {
 
     const bc = BUILDING_ORDER.indexOf(a.delivery_building) - BUILDING_ORDER.indexOf(b.delivery_building);
     if (bc !== 0) return bc;
-    const [ab, au] = subKey(a), [bb, bu] = subKey(b);
-    if (ab !== bb) return ab - bb;
-    if (au !== bu) return au - bu;
 
+    // 苑内时间优先：尽快 > 早的预定时间；同时间才看楼号
     if (!a.deliver_time && b.deliver_time) return -1;
     if (a.deliver_time && !b.deliver_time) return 1;
-    return String(a.deliver_time).localeCompare(String(b.deliver_time));
+    const tc = String(a.deliver_time || '').localeCompare(String(b.deliver_time || ''));
+    if (tc !== 0) return tc;
+
+    const [ab, au] = subKey(a), [bb, bu] = subKey(b);
+    if (ab !== bb) return ab - bb;
+    return au - bu;
   });
 }
 
