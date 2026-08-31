@@ -47,6 +47,7 @@
       <div class="toolbar no-print" style="margin-top:2px">
         <button class="btn ghost sm" onclick="App.exportStatsCsv()"><i class="bi bi-file-earmark-spreadsheet"></i> 导出 CSV</button>
         <button class="btn ghost sm" onclick="document.getElementById('invFile').click()"><i class="bi bi-upload"></i> 导入 Excel 库存</button>
+        <button class="btn ghost sm" style="background:#fdeaea;color:var(--danger)" onclick="App.clearInventory()"><i class="bi bi-trash"></i> 清空库存</button>
         <input type="file" id="invFile" accept=".xlsx,.xls" style="display:none" onchange="App.importInventory(this)" />
       </div>
       <div id="statsInner"></div>

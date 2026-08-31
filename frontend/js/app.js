@@ -810,6 +810,17 @@ window.App.importInventory = async function (input) {
   }
 };
 
+/* 清空全部库存（重新导入前重置） */
+window.App.clearInventory = function () {
+  confirmModal("清空库存", "将删除全部库存记录（订单和统计不受影响），清空后需重新导入 Excel。确定清空？", async () => {
+    try {
+      const res = await api("/api/inventory", "DELETE");
+      toast(`已清空 ${res.deleted} 条库存记录`);
+      loadStats();
+    } catch (e) { toast(e.message); }
+  });
+};
+
 /* ---------- 求书登记（未找到但有人需要的书） ---------- */
 window.App.loadWanted = async function () {
   await loadWanted();
