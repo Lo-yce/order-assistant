@@ -50,6 +50,8 @@ function isPublicPath(p, method) {
   return (
     (p === '/api/orders' && method === 'POST') ||
     (p === '/api/book-names' && method === 'GET') ||
+    (p === '/api/book-stock' && method === 'GET') ||
+    (/^\/api\/orders\/\d+\/cancel$/.test(p) && method === 'POST') ||
     (p === '/api/my-orders' && method === 'GET') ||
     (p === '/api/wanted/public' && method === 'POST')
   );
@@ -114,6 +116,7 @@ export async function onRequest({ request, env }) {
     // ===== 统计 / 书名联想 / 清空已完成 =====
     if (p === '/api/stats' && method === 'GET') return await getStats(url);
     if (p === '/api/book-names' && method === 'GET') return await getBookNames();
+    if (p === '/api/book-stock' && method === 'GET') return await getBookStock();
     if (p === '/api/clear-done' && method === 'POST') return await clearDone();
 
     // ===== 库存 =====
@@ -136,6 +139,10 @@ export async function onRequest({ request, env }) {
     // ===== 订单状态更新 =====
     let m = p.match(/^\/api\/orders\/(\d+)\/status$/);
     if (m && method === 'PATCH') return await updateStatus(Number(m[1]), await readBody(request));
+
+    // ===== 顾客自助取消（公开） =====
+    m = p.match(/^\/api\/orders\/(\d+)\/cancel$/);
+    if (m && method === 'POST') return await cancelOrderPublic(Number(m[1]), await readBody(request));
 
     // ===== 单个订单 =====
     m = p.match(/^\/api\/orders\/(\d+)$/);
@@ -169,7 +176,9 @@ export async function onRequest({ request, env }) {
 /* ---------- 排序：待/配送中按 deliver_time 空优先→升序；done 恒排最末 ---------- */
 function sortOrders(list) {
   return [...list].sort((a, b) => {
-    if ((a.status === 'done') !== (b.status === 'done')) return a.status === 'done' ? 1 : -1;
+    const aEnd = a.status === 'done' || a.status === 'cancelled';
+    const bEnd = b.status === 'done' || b.status === 'cancelled';
+    if (aEnd !== bEnd) return aEnd ? 1 : -1;
     const ta = a.deliver_time || '', tb = b.deliver_time || '';
     if (!ta && tb) return -1;
     if (ta && !tb) return 1;
@@ -270,8 +279,9 @@ async function delOrder(id) {
 
 async function clearDone() {
   const list = await load('orders');
-  const deleted = list.filter((o) => o.status === 'done').length;
-  await save('orders', list.filter((o) => o.status !== 'done'));
+  const keep = list.filter((o) => o.status !== 'done' && o.status !== 'cancelled'); // 同时清已完成与已取消
+  const deleted = list.length - keep.length;
+  await save('orders', keep);
   return json({ ok: true, data: { deleted } });
 }
 
@@ -283,6 +293,7 @@ async function getStats(url) {
 
   const map = {};
   for (const o of orders) {
+    if (o.status === 'cancelled') continue; // 已取消订单不计入需求统计
     if (building && o.delivery_building !== building) continue;
     for (const it of o.items || []) {
       const m = (map[it.book_name] = map[it.book_name] || { book_name: it.book_name, total_quantity: 0, order_count: 0, stock: null, remaining: null });
@@ -314,6 +325,43 @@ async function getBookNames() {
   const use = {};
   for (const o of orders) for (const it of o.items || []) use[it.book_name] = (use[it.book_name] || 0) + 1;
   return json({ ok: true, data: Object.keys(use).sort((a, b) => use[b] - use[a]) });
+}
+
+/* 公开：书名 + 剩余库存（顾客下单联想用；remaining 为 null 表示未维护库存） */
+async function getBookStock() {
+  const orders = await load('orders');
+  const inventory = await load('inventory');
+  const demand = {};
+  for (const o of orders) {
+    if (o.status === 'cancelled') continue; // 已取消订单不计需求
+    for (const it of o.items || []) demand[it.book_name] = (demand[it.book_name] || 0) + it.quantity;
+  }
+  const list = [];
+  const seen = {};
+  for (const v of inventory) {
+    seen[v.book_name] = true;
+    list.push({ book_name: v.book_name, remaining: v.stock - (demand[v.book_name] || 0) });
+  }
+  for (const n of Object.keys(demand)) {
+    if (!seen[n]) list.push({ book_name: n, remaining: null }); // 只有订单没有库存记录
+  }
+  return json({ ok: true, data: list });
+}
+
+/* 公开：顾客自助取消订单（仅待配送状态，联系方式需匹配） */
+async function cancelOrderPublic(id, body) {
+  const contact = String((body && body.contact) || '').trim();
+  if (!contact) return json({ ok: false, error: '缺少联系方式' }, 400);
+  const list = await load('orders');
+  const idx = list.findIndex((o) => o.id === id);
+  if (idx < 0) return json({ ok: false, error: '订单不存在' }, 404);
+  const o = list[idx];
+  if (o.contact !== contact) return json({ ok: false, error: '联系方式与订单不符，无法取消' }, 403);
+  if (o.status !== 'pending') return json({ ok: false, error: '该订单已在处理中，无法自助取消，请直接联系我们' }, 400);
+  o.status = 'cancelled';
+  o.updated_at = new Date().toISOString();
+  await save('orders', list);
+  return json({ ok: true, data: { id } });
 }
 
 async function getInventory() {

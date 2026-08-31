@@ -44,6 +44,8 @@ function isPublicPath(p, method) {
   return (
     (p === '/api/orders' && method === 'POST') ||
     (p === '/api/book-names' && method === 'GET') ||
+    (p === '/api/book-stock' && method === 'GET') ||
+    (/^\/api\/orders\/\d+\/cancel$/.test(p) && method === 'POST') ||
     (p === '/api/my-orders' && method === 'GET') ||
     (p === '/api/wanted/public' && method === 'POST')
   );
@@ -92,6 +94,7 @@ export default {
       // 统计 / 书名联想 / 清空已完成
       if (p === '/api/stats' && method === 'GET') return await getStats(db, url);
       if (p === '/api/book-names' && method === 'GET') return await getBookNames(db);
+      if (p === '/api/book-stock' && method === 'GET') return await getBookStock(db);
       if (p === '/api/clear-done' && method === 'POST') return await clearDone(db);
 
       // 库存
@@ -123,6 +126,13 @@ export default {
       if (m && method === 'PATCH') {
         const body = await readBody(request);
         return await updateStatus(db, Number(m[1]), body);
+      }
+
+      // 顾客自助取消（公开）
+      m = p.match(/^\/api\/orders\/(\d+)\/cancel$/);
+      if (m && method === 'POST') {
+        const body = await readBody(request);
+        return await cancelOrderPublic(db, Number(m[1]), body);
       }
 
       // 单个订单 /api/orders/:id
@@ -168,7 +178,7 @@ async function getOrders(db, url) {
   const where = status ? 'WHERE status = ?' : '';
   const binds = status ? [status] : [];
   const sql = `SELECT * FROM orders ${where}
-    ORDER BY (status='done') ASC,
+    ORDER BY ((status='done') OR (status='cancelled')) ASC,
              (deliver_time IS NULL OR deliver_time='') DESC,
              deliver_time ASC`;
   const { results: orders } = await db.prepare(sql).bind(...binds).all();
@@ -241,21 +251,22 @@ async function delOrder(db, id) {
 }
 
 async function clearDone(db) {
-  const before = await db.prepare('SELECT COUNT(*) as c FROM orders WHERE status=?').bind('done').first();
-  await db.prepare('DELETE FROM order_items WHERE order_id IN (SELECT id FROM orders WHERE status=?)').bind('done').run();
-  await db.prepare('DELETE FROM orders WHERE status=?').bind('done').run();
+  const before = await db.prepare("SELECT COUNT(*) as c FROM orders WHERE status IN ('done','cancelled')").first();
+  await db.prepare("DELETE FROM order_items WHERE order_id IN (SELECT id FROM orders WHERE status IN ('done','cancelled'))").run();
+  await db.prepare("DELETE FROM orders WHERE status IN ('done','cancelled')").run();
   return json({ ok: true, data: { deleted: before.c } });
 }
 
-// 统计：需求合计 + 库存 + 剩余；可选 ?building= 按苑筛选
+// 统计：需求合计 + 库存 + 剩余；可选 ?building= 按苑筛选；已取消订单不计需求
 async function getStats(db, url) {
   const building = url.searchParams.get('building');
   const aggSql = building
     ? `SELECT i.book_name, SUM(i.quantity) AS total_quantity, COUNT(DISTINCT i.order_id) AS order_count
        FROM order_items i JOIN orders o ON o.id = i.order_id
-       WHERE o.delivery_building = ? GROUP BY i.book_name`
-    : `SELECT book_name, SUM(quantity) AS total_quantity, COUNT(DISTINCT order_id) AS order_count
-       FROM order_items GROUP BY book_name`;
+       WHERE o.delivery_building = ? AND o.status != 'cancelled' GROUP BY i.book_name`
+    : `SELECT i.book_name, SUM(i.quantity) AS total_quantity, COUNT(DISTINCT i.order_id) AS order_count
+       FROM order_items i JOIN orders o ON o.id = i.order_id
+       WHERE o.status != 'cancelled' GROUP BY i.book_name`;
   const binds = building ? [building] : [];
   const { results: agg } = await db.prepare(aggSql).bind(...binds).all();
 
@@ -289,6 +300,40 @@ async function getBookNames(db) {
     'SELECT book_name, COUNT(*) as use_count FROM order_items GROUP BY book_name ORDER BY use_count DESC'
   ).all();
   return json({ ok: true, data: results.map((r) => r.book_name) });
+}
+
+// 公开：书名 + 剩余库存（顾客下单联想用；remaining 为 null 表示未维护库存）
+async function getBookStock(db) {
+  const { results: items } = await db.prepare(
+    `SELECT i.book_name, SUM(i.quantity) AS q FROM order_items i
+     JOIN orders o ON o.id = i.order_id WHERE o.status != 'cancelled' GROUP BY i.book_name`
+  ).all();
+  const { results: inv } = await db.prepare('SELECT book_name, stock FROM inventory').all();
+  const demand = {};
+  for (const r of items) demand[r.book_name] = r.q;
+  const list = [];
+  const seen = {};
+  for (const v of inv) {
+    seen[v.book_name] = true;
+    list.push({ book_name: v.book_name, remaining: v.stock - (demand[v.book_name] || 0) });
+  }
+  for (const n of Object.keys(demand)) {
+    if (!seen[n]) list.push({ book_name: n, remaining: null }); // 只有订单没有库存记录
+  }
+  return json({ ok: true, data: list });
+}
+
+// 公开：顾客自助取消订单（仅待配送状态，联系方式需匹配）
+async function cancelOrderPublic(db, id, body) {
+  const contact = String((body && body.contact) || '').trim();
+  if (!contact) return json({ ok: false, error: '缺少联系方式' }, 400);
+  const found = await db.prepare('SELECT id, contact, status FROM orders WHERE id = ?').bind(id).first();
+  if (!found) return json({ ok: false, error: '订单不存在' }, 404);
+  if (found.contact !== contact) return json({ ok: false, error: '联系方式与订单不符，无法取消' }, 403);
+  if (found.status !== 'pending') return json({ ok: false, error: '该订单已在处理中，无法自助取消，请直接联系我们' }, 400);
+  await db.prepare("UPDATE orders SET status='cancelled', updated_at=? WHERE id=?")
+    .bind(new Date().toISOString(), id).run();
+  return json({ ok: true, data: { id } });
 }
 
 async function getInventory(db) {

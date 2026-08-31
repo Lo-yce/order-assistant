@@ -18,6 +18,7 @@ const STATUS = {
   pending: { name: "待配送", cls: "pending" },
   delivering: { name: "配送中", cls: "delivering" },
   done: { name: "已完成", cls: "done" },
+  cancelled: { name: "已取消", cls: "done" },
 };
 
 const state = {
@@ -256,9 +257,12 @@ function showPage(id) { $("#page-" + id).classList.add("active"); }
 
 /* ---------- 区域配送（首页） ---------- */
 function renderDashboard() {
-  const pendingCount = (b) => state.orders.filter((o) => o.delivery_building === b && o.status !== "done").length;
+  // 只统计待配送/配送中（已取消的不算）
+  const active = (o) => o.status === "pending" || o.status === "delivering";
+  const pendingCount = (b) => state.orders.filter((o) => o.delivery_building === b && active(o)).length;
   const totalPending = state.orders.filter((o) => o.status === "pending").length;
-  $("#topSub").textContent = `共 ${state.orders.length} 单 · ${totalPending} 单待配送`;
+  const validCount = state.orders.filter((o) => o.status !== "cancelled").length;
+  $("#topSub").textContent = `共 ${validCount} 单 · ${totalPending} 单待配送`;
 
   let html = '<h2 style="margin:6px 0 14px">选择配送区域</h2>';
   for (const b of Object.keys(BUILDINGS)) {
@@ -285,6 +289,7 @@ function renderOrders() {
     <button class="chip ${state.statusFilter === "pending" ? "active" : ""}" onclick="App.setStatusFilter('pending')">待配送</button>
     <button class="chip ${state.statusFilter === "delivering" ? "active" : ""}" onclick="App.setStatusFilter('delivering')">配送中</button>
     <button class="chip ${state.statusFilter === "done" ? "active" : ""}" onclick="App.setStatusFilter('done')">已完成</button>
+    <button class="chip ${state.statusFilter === "cancelled" ? "active" : ""}" onclick="App.setStatusFilter('cancelled')">已取消</button>
     <button class="chip ${state.statusFilter === "pickup" ? "active" : ""}" onclick="App.setStatusFilter('pickup')"><i class="bi bi-shop"></i> 自提</button>`;
 
   let subChips = "";
@@ -304,10 +309,12 @@ function renderOrders() {
   if (state.statusFilter === "pickup") orders = orders.filter((o) => o.delivery_method === "self_pickup");
   else if (state.statusFilter !== "all") orders = orders.filter((o) => o.status === state.statusFilter);
 
-  // 排序：尽快优先 → 时间升序 → done 最末
+  // 排序：尽快优先 → 时间升序 → 已完成/已取消最末
   orders.sort((a, b) => {
-    if (a.status === "done" && b.status !== "done") return 1;
-    if (a.status !== "done" && b.status === "done") return -1;
+    const aEnd = a.status === "done" || a.status === "cancelled";
+    const bEnd = b.status === "done" || b.status === "cancelled";
+    if (aEnd && !bEnd) return 1;
+    if (!aEnd && bEnd) return -1;
     const ta = a.deliver_time || "0000", tb = b.deliver_time || "0000";
     if (!a.deliver_time && b.deliver_time) return -1;
     if (a.deliver_time && !b.deliver_time) return 1;
@@ -409,6 +416,9 @@ function orderCard(o) {
     ? `<span class="zone"><i class="bi bi-shop"></i> 自提 · ${esc(o.pickup_location || "师生活动中心")}</span>`
     : `<span class="zone">${esc(o.delivery_building)} ${esc(o.sub_zone)}</span>`;
 
+  // 已取消/已完成：置灰、无操作按钮（已取消可用「清空已完成」批量清理）
+  const isEnded = o.status === "done" || o.status === "cancelled";
+
   const actions = `
     <div class="order-actions" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
       ${o.status !== "pending" ? `<button class="btn ghost sm" onclick="App.setStatus(${o.id},'pending')" title="退回待配送"><i class="bi bi-arrow-counterclockwise"></i> 退回</button>` : ""}
@@ -417,7 +427,7 @@ function orderCard(o) {
     </div>
     ${swipeBtnHtml(o)}`;
 
-  return `<div class="card order-card card-status-${o.status} ${o.status === "done" ? "done" : ""}">
+  return `<div class="card order-card card-status-${o.status} ${isEnded ? "done" : ""}">
     <div class="order-head">
       ${place}
       <span class="tag ${s.cls}">${s.name}</span>
@@ -428,7 +438,7 @@ function orderCard(o) {
       ${o.remark ? `<br><i class="bi bi-chat-left"></i> ${esc(o.remark)}` : ""}
     </div>
     <div class="order-items">${items}</div>
-    ${o.status === "done" ? "" : actions}
+    ${isEnded ? "" : actions}
   </div>`;
 }
 function esc(s) {
@@ -997,12 +1007,12 @@ function renderHistory() {
     : '<div class="empty">暂无已完成订单</div>';
 }
 window.App.clearDone = function () {
-  confirmModal("清空已完成订单", "将删除所有已完成订单及其书单，不可恢复。确定继续？", async () => {
+  confirmModal("清空已完成订单", "将删除所有已完成和已取消的订单及其书单，不可恢复。确定继续？", async () => {
     try {
       const res = await api("/api/clear-done", "POST");
       await loadOrders();
       render();
-      toast(`已清空 ${res.deleted} 条已完成订单`);
+      toast(`已清空 ${res.deleted} 条订单`);
     } catch (e) { toast(e.message); }
   });
 };
@@ -1031,7 +1041,7 @@ window.App.shareWantedLink = async function () {
 
 /* ---------- 配送清单（打印 / 导出 CSV） ---------- */
 window.App.exportManifest = function () {
-  const active = state.orders.filter((o) => o.status !== "done");
+  const active = state.orders.filter((o) => o.status !== "done" && o.status !== "cancelled"); // 已取消不进清单
   if (!active.length) { toast("当前没有待配送订单"); return; }
   // 自提单独立分组，配送单按大苑分组
   const pickups = active.filter((o) => o.delivery_method === "self_pickup");

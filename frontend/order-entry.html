@@ -22,6 +22,10 @@
     .tag-pending { background: #fdeaea; color: var(--danger); }
     .tag-delivering { background: #fdf3e2; color: var(--warn); }
     .tag-done { background: var(--pri-light); color: var(--pri-dark); }
+    .tag-cancelled { background: #eef2f6; color: #7a8794; }
+    /* 书名联想里的库存标签 */
+    .book-suggest-item .sug-stock { float: right; font-size: 12px; color: var(--pri); font-weight: 600; margin-left: 6px; }
+    .book-suggest-item .sug-stock.out { color: var(--danger); }
     .my-order-item .m-tag { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; background: #eef2f6; color: #5a6b7a; margin-right: 4px; }
   </style>
 </head>
@@ -33,7 +37,6 @@
 
     <form id="orderForm" onsubmit="return false">
     <div class="card">
-      <datalist id="bookNamesList"></datalist>
 
       <!-- 配送方式切换：配送 / 自提 -->
       <div class="field">
@@ -107,6 +110,18 @@
 
   <div class="toast" id="toast"></div>
 
+  <!-- 取消订单确认弹窗 -->
+  <div class="modal-mask" id="cMask">
+    <div class="modal">
+      <h3 id="cTitle"></h3>
+      <p id="cText"></p>
+      <div class="btns">
+        <button type="button" class="btn ghost" onclick="cClose()">再想想</button>
+        <button type="button" class="btn danger" id="cOkBtn">确定取消</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     /* API 地址：EdgeOne Pages 部署时前后端同域走相对路径；GitHub Pages 部署时走 Cloudflare Worker */
     const WORKER_BASE = location.hostname.endsWith("edgeone.app") ? "" : "https://order-assistant-worker.loyce.workers.dev";
@@ -125,7 +140,11 @@
 
     function itemRow(book, qty){
       return `<div class="item-row">
-        <input class="input item-book" list="bookNamesList" placeholder="书名" value="${esc(book||"")}" />
+        <div class="book-suggest" style="position:relative;flex:1">
+          <input class="input item-book" placeholder="书名（支持模糊搜索）" value="${esc(book||"")}" autocomplete="off"
+            oninput="onBookInput(this)" onfocus="onBookInput(this)" onblur="onBookBlur(this)" />
+          <div class="book-suggest-list"></div>
+        </div>
         <input class="input item-qty" type="number" min="1" step="1" placeholder="数量" value="${qty||1}" />
         <button type="button" class="trash" onclick="delRow(this)"><i class="bi bi-x-lg"></i></button>
       </div>`;
@@ -154,16 +173,49 @@
       sel.disabled = !zones.length;
     });
 
-    // 初始化一行 + 加载联想书名
+    /* ===== 书名模糊联想（带剩余库存，与后台一致规则） ===== */
+    const bookStock = {}; // 书名 → remaining（null = 未维护库存）
+    function isSubseq(needle, hay){ let i=0; for(const ch of hay){ if(i<needle.length && needle[i]===ch) i++; } return i>=needle.length; }
+    function fuzzyBook(name, kw){
+      if(!kw) return true;
+      const n = name.toLowerCase();
+      return kw.toLowerCase().split(/\s+/).filter(Boolean).every(t => n.includes(t) || isSubseq(t, n));
+    }
+    function stockBadge(rem){
+      if(rem == null) return "";
+      return rem <= 0 ? `<span class="sug-stock out">缺货</span>` : `<span class="sug-stock">剩 ${rem} 本</span>`;
+    }
+    window.onBookInput = function(input){
+      const box = input.parentElement.querySelector(".book-suggest-list");
+      if(!box) return;
+      const kw = input.value.trim();
+      const names = Object.keys(bookStock);
+      const list = kw ? names.filter(n=>fuzzyBook(n,kw)).slice(0,12) : names.slice(0,8);
+      if(!list.length){ box.innerHTML=""; box.style.display="none"; return; }
+      box.innerHTML = list.map(n=>
+        `<div class="book-suggest-item" onmousedown="pickBook(this,'${esc(n).replace(/'/g,"\\'")}')">${esc(n)}${stockBadge(bookStock[n])}</div>`
+      ).join("");
+      box.style.display = "block";
+    };
+    window.onBookBlur = function(input){
+      const box = input.parentElement.querySelector(".book-suggest-list");
+      if(box) setTimeout(()=>{ box.style.display="none"; }, 150); // 延迟让 mousedown 先触发
+    };
+    window.pickBook = function(item, name){
+      const input = item.closest(".book-suggest").querySelector(".item-book");
+      input.value = name;
+      item.parentElement.style.display = "none";
+    };
+    fetch(WORKER_BASE + "/api/book-stock").then(r=>r.json()).then(d=>{
+      if(d.ok) d.data.forEach(b=>{ bookStock[b.book_name] = b.remaining; });
+    }).catch(()=>{});
+
+    // 初始化一行
     $("#itemBox").innerHTML = itemRow();
     $("#addRowBtn").onclick = ()=>{ $("#itemBox").insertAdjacentHTML("beforeend", itemRow()); };
 
-    fetch(WORKER_BASE + "/api/book-names").then(r=>r.json()).then(d=>{
-      if(d.ok) $("#bookNamesList").innerHTML = d.data.map(n=>`<option value="${esc(n)}"></option>`).join("");
-    }).catch(()=>{});
-
     // —— 查我的订单 ——
-    const STATUS_NAME = { pending:"待配送", delivering:"配送中", done:"已完成" };
+    const STATUS_NAME = { pending:"待配送", delivering:"配送中", done:"已完成", cancelled:"已取消" };
     window.toggleMyOrders = function(show){
       $("#myOrdersCard").style.display = show ? "" : "none";
       if(show) setTimeout(()=>{ try{ $("#myContact").focus(); }catch(e){} }, 60);
@@ -175,17 +227,21 @@
         const place = o.delivery_method === "self_pickup"
           ? `<span class="m-tag">自提</span>${esc(o.pickup_location || "师生活动中心")}`
           : `<span class="m-tag">配送</span>${esc(o.delivery_building)} ${esc(o.sub_zone)}`;
+        const cancelBtn = o.status === "pending"
+          ? `<div style="margin-top:6px"><button type="button" class="btn ghost sm" style="background:#fdeaea;color:var(--danger)" onclick="cancelOrder(${o.id})"><i class="bi bi-x-circle"></i> 取消这单</button></div>` : "";
         return `
         <div class="my-order-item">
           <b>#${o.id}</b> · ${place}
           <span class="tag tag-${o.status}">${STATUS_NAME[o.status]||o.status}</span>
           <div style="color:var(--muted);margin-top:4px">${(o.items||[]).map(it=>`${esc(it.book_name)} ×${it.quantity}`).join("、")}</div>
+          ${cancelBtn}
         </div>`;
       }).join("");
     }
     window.queryMyOrders = async function(){
       const c = $("#myContact").value.trim();
       if(!c) return toast("请输入下单时的联系方式");
+      window._queryContact = c;
       const btnWrap = $("#myOrdersResult");
       btnWrap.innerHTML = '<div class="empty">查询中…</div>';
       try{
@@ -194,6 +250,37 @@
         if(!rj.ok) throw new Error(rj.error || "查询失败");
         renderMyOrders(rj.data || []);
       }catch(e){ btnWrap.innerHTML = '<div class="empty">查询失败，请稍后再试</div>'; }
+    };
+
+    /* ===== 顾客自助取消订单（仅待配送状态） ===== */
+    let _cancelCb = null;
+    function confirmEntry(title, text, cb){
+      $("#cTitle").textContent = title;
+      $("#cText").textContent = text;
+      _cancelCb = cb;
+      $("#cMask").classList.add("show");
+    }
+    window.cClose = function(){ $("#cMask").classList.remove("show"); _cancelCb = null; };
+    document.getElementById("cOkBtn").onclick = async function(){
+      const cb = _cancelCb;
+      window.cClose();
+      if(cb) await cb();
+    };
+    window.cancelOrder = async function(id){
+      const c = window._queryContact || window._lastContact || "";
+      if(!c) return toast("请先查询订单再取消");
+      confirmEntry("取消订单", `确定取消订单 #${id} 吗？取消后不可恢复。`, async ()=>{
+        try{
+          const resp = await fetch(`${WORKER_BASE}/api/orders/${id}/cancel`, {
+            method: "POST", headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({ contact: c })
+          });
+          const rj = await resp.json().catch(()=>({}));
+          if(!rj.ok) throw new Error(rj.error || "取消失败");
+          toast("订单已取消");
+          window.queryMyOrders(); // 刷新列表
+        }catch(e){ toast(e.message || "取消失败，请稍后再试"); }
+      });
     };
 
     $("#eSubmit").onclick = async function(){
