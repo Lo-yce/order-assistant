@@ -196,7 +196,10 @@ input, select, textarea { font: inherit; }
 /* 配送中(杏) → 目标已完成(灰白) */
 .card-status-delivering::after { background: #eceef0; }
 .order-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.order-head .head-l { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.order-head .oid { font-size: 12px; font-weight: 700; color: var(--muted); background: #fff; border: 1px solid #e3e8ec; padding: 1px 7px; border-radius: 999px; flex: none; }
 .order-head .zone { font-weight: 700; font-size: 16px; }
+.order-head .zone .bi { color: var(--pri); }
 .order-time { font-size: 13px; color: var(--muted); }
 .tag {
   font-size: 12px;
@@ -206,6 +209,37 @@ input, select, textarea { font: inherit; }
   color: #fff;
   margin-left: auto;
 }
+
+/* 元信息行：时间 / 联系方式小芯片 */
+.order-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.meta-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 13px; color: var(--text);
+  background: rgba(255,255,255,.75);
+  border: 1px solid rgba(0,0,0,.05);
+  border-radius: 999px;
+  padding: 4px 10px;
+  text-decoration: none;
+}
+.meta-chip .bi { color: var(--muted); font-size: 13px; }
+.meta-chip.tel { color: var(--pri-dark); background: #fff; border-color: var(--pri-light); }
+.meta-chip.tel .bi { color: var(--pri); }
+.meta-chip.cpy { cursor: pointer; }
+.meta-chip.cpy:active { background: var(--pri-light); }
+
+/* 备注提示条（琥珀，配送前必看） */
+.order-remark {
+  display: flex; align-items: flex-start; gap: 6px;
+  font-size: 13px; line-height: 1.5;
+  background: #fdf3e2;
+  border: 1px solid rgba(232, 161, 61, .35);
+  border-radius: 10px;
+  padding: 7px 10px;
+  margin-top: 8px;
+  color: #9c6b1f;
+  word-break: break-all;
+}
+.order-remark .bi { flex: none; margin-top: 1px; color: var(--warn); }
 .tag.pending { background: var(--pending); }
 .tag.delivering { background: var(--warn); }
 .tag.done { background: var(--done); }
@@ -262,15 +296,35 @@ input, select, textarea { font: inherit; }
 .swipe-btn.activated .swipe-knob { color: #fff; background: rgba(255,255,255,.25); }
 .swipe-btn.done-flash .swipe-knob { transition: left .18s; }
 .order-items {
-  margin: 10px 0;
+  margin: 10px 0 0;
   border: 1px solid var(--pri-light);
   border-radius: 12px;
   padding: 8px 10px;
-  background: #f8fcfc;
+  background: #fff;
 }
-.order-items .row { display: flex; justify-content: space-between; font-size: 15px; padding: 3px 0; }
-.order-items .row .qty { color: var(--pri); font-weight: 700; }
+.oi-head {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 12px; color: var(--muted);
+  padding-bottom: 5px; margin-bottom: 4px;
+  border-bottom: 1px dashed var(--pri-light);
+}
+.oi-head .bi { margin-right: 3px; }
+.oi-head .oi-total { font-weight: 700; color: var(--pri-dark); background: var(--pri-light); border-radius: 999px; padding: 1px 8px; }
+.order-items .row { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 15px; padding: 3px 0; }
+.order-items .row .bk { min-width: 0; word-break: break-all; }
+.order-items .row .qty-badge {
+  flex: none;
+  font-size: 12px; font-weight: 700;
+  color: var(--pri-dark);
+  background: var(--pri-light);
+  border-radius: 999px;
+  padding: 1px 9px;
+}
 .order-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+
+/* 已取消：楼号/书名删除线 + 左条变灰 */
+.order-card.cancelled .zone, .order-card.cancelled .bk { text-decoration: line-through; color: var(--muted); }
+.order-card.cancelled::before { background: #c3cbd2; }
 
 /* 表单 */
 .field { margin-bottom: 14px; }

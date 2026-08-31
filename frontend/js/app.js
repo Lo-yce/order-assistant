@@ -436,40 +436,69 @@ function swipeBtnHtml(o) {
 
 function orderCard(o) {
   const s = STATUS[o.status];
+  const totalQty = o.items.reduce((n, it) => n + it.quantity, 0);
   const items = o.items.map((it) =>
-    `<div class="row"><span>${esc(it.book_name)}</span><span class="qty">×${it.quantity}</span></div>`).join("");
-  const time = `<span class="order-time"><i class="bi bi-clock"></i> ${fmtTime(o.deliver_time)}</span>`;
+    `<div class="row"><span class="bk">${esc(it.book_name)}</span><span class="qty-badge">${it.quantity}</span></div>`).join("");
+
   // 取书方式：自提显示地点，配送显示苑+楼号（旧数据无字段按配送处理）
   const isPickup = o.delivery_method === "self_pickup";
   const place = isPickup
     ? `<span class="zone"><i class="bi bi-shop"></i> 自提 · ${esc(o.pickup_location || "师生活动中心")}</span>`
-    : `<span class="zone">${esc(o.delivery_building)} ${esc(o.sub_zone)}</span>`;
+    : `<span class="zone"><i class="bi bi-geo-alt"></i> ${esc(o.delivery_building)} ${esc(o.sub_zone)}</span>`;
+
+  // 联系方式：手机号一键拨号，其他文本点击复制
+  const contactRaw = esc(o.contact || "");
+  const contactHtml = o.contact
+    ? (/^1\d{10}$/.test(o.contact)
+      ? `<a href="tel:${contactRaw}" class="meta-chip tel"><i class="bi bi-telephone"></i> ${contactRaw}</a>`
+      : `<span class="meta-chip cpy" onclick="App.copyText('${contactRaw.replace(/'/g, "\\'")}')"><i class="bi bi-person"></i> ${contactRaw}</span>`)
+    : `<span class="meta-chip"><i class="bi bi-person"></i> 无联系方式</span>`;
 
   // 已取消/已完成：置灰、无操作按钮（已取消可用「清空已完成」批量清理）
   const isEnded = o.status === "done" || o.status === "cancelled";
+  const isCancelled = o.status === "cancelled";
 
   const actions = `
-    <div class="order-actions" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+    <div class="order-actions">
       ${o.status !== "pending" ? `<button class="btn ghost sm" onclick="App.setStatus(${o.id},'pending')" title="退回待配送"><i class="bi bi-arrow-counterclockwise"></i> 退回</button>` : ""}
       <button class="btn ghost sm" onclick="App.editOrder(${o.id})"><i class="bi bi-pencil"></i> 编辑</button>
       <button class="btn ghost sm" onclick="App.delOrder(${o.id})"><i class="bi bi-trash3"></i> 删除</button>
     </div>
     ${swipeBtnHtml(o)}`;
 
-  return `<div class="card order-card card-status-${o.status} ${isEnded ? "done" : ""}">
+  return `<div class="card order-card card-status-${o.status} ${isEnded ? "done" : ""} ${isCancelled ? "cancelled" : ""}">
     <div class="order-head">
-      ${place}
+      <div class="head-l">
+        <span class="oid">#${o.id}</span>
+        ${place}
+      </div>
       <span class="tag ${s.cls}">${s.name}</span>
     </div>
     <div class="order-meta">
-      ${time}<br>
-      <i class="bi bi-person"></i> ${esc(o.contact || "无联系方式")}
-      ${o.remark ? `<br><i class="bi bi-chat-left"></i> ${esc(o.remark)}` : ""}
+      <span class="meta-chip time"><i class="bi bi-clock"></i> ${fmtTime(o.deliver_time)}</span>
+      ${contactHtml}
     </div>
-    <div class="order-items">${items}</div>
+    ${o.remark ? `<div class="order-remark"><i class="bi bi-chat-left-quote"></i> ${esc(o.remark)}</div>` : ""}
+    <div class="order-items">
+      <div class="oi-head"><span><i class="bi bi-journal-text"></i> 书单</span><span class="oi-total">共 ${totalQty} 本</span></div>
+      ${items}
+    </div>
     ${isEnded ? "" : actions}
   </div>`;
 }
+/* 点击复制联系方式 */
+window.App.copyText = async function (t) {
+  try {
+    await navigator.clipboard.writeText(t);
+    toast(`已复制：${t}`);
+  } catch (e) {
+    // 旧浏览器降级
+    const ta = document.createElement("textarea");
+    ta.value = t; document.body.appendChild(ta);
+    ta.select(); document.execCommand("copy"); ta.remove();
+    toast(`已复制：${t}`);
+  }
+};
 function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
