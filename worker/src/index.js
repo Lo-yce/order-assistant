@@ -42,7 +42,8 @@ function isPublicPath(p, method) {
   return (
     (p === '/api/orders' && method === 'POST') ||
     (p === '/api/book-names' && method === 'GET') ||
-    (p === '/api/my-orders' && method === 'GET')
+    (p === '/api/my-orders' && method === 'GET') ||
+    (p === '/api/wanted/public' && method === 'POST')
   );
 }
 
@@ -106,6 +107,12 @@ export default {
       if (p === '/api/wanted' && method === 'POST') {
         const body = await readBody(request);
         return await createWanted(db, body);
+      }
+
+      // 顾客自助登记求书（公开接口，无需密码）
+      if (p === '/api/wanted/public' && method === 'POST') {
+        const body = await readBody(request);
+        return await createWantedPublic(db, body);
       }
 
       // 状态更新 /api/orders/:id/status
@@ -386,6 +393,20 @@ function validateWanted(body) {
   if (!body.book_name || !String(body.book_name).trim()) return '书名为空';
   if (!Number.isInteger(Number(body.quantity)) || Number(body.quantity) < 1) return '数量需为≥1的整数';
   return null;
+}
+
+// 顾客自助登记求书：必须留联系方式，数量限制 1~99 防滥用
+async function createWantedPublic(db, body) {
+  const err = validateWanted(body);
+  if (err) return json({ ok: false, error: err }, 400);
+  const contact = String(body.contact || '').trim();
+  if (!contact) return json({ ok: false, error: '请填写联系方式' }, 400);
+  if (Number(body.quantity) > 99) return json({ ok: false, error: '数量需≤99' }, 400);
+  const now = new Date().toISOString();
+  const res = await db.prepare(
+    'INSERT INTO wanted_books (book_name, quantity, contact, remark, status, created_at, updated_at) VALUES (?,?,?,?,?,?,?)'
+  ).bind(String(body.book_name).trim(), Number(body.quantity), contact, body.remark || '', 'open', now, now).run();
+  return json({ ok: true, data: { id: Number(res.meta.last_row_id) } });
 }
 
 function validateOrder(body) {

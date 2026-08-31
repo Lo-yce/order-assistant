@@ -966,6 +966,17 @@ window.App.shareLink = async function () {
   }
 };
 
+/* ---------- 分享求书链接（顾客自助登记求书） ---------- */
+window.App.shareWantedLink = async function () {
+  const url = new URL("wanted-entry.html", location.href).href;
+  try {
+    await navigator.clipboard.writeText(url);
+    toast("求书链接已复制，发给顾客即可自助登记");
+  } catch (e) {
+    prompt("复制求书链接", url);
+  }
+};
+
 /* ---------- 配送清单（打印 / 导出 CSV） ---------- */
 window.App.exportManifest = function () {
   const active = state.orders.filter((o) => o.status !== "done");

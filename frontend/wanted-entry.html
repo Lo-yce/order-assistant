@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>校园二手图书 · 求书登记</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" />
+  <link rel="stylesheet" href="css/style.css" />
+  <style>
+    /* 顾客求书页为独立外观，无后台导航 */
+    .entry-hero { background: linear-gradient(135deg, var(--pri), #12b8ae); color: #fff; text-align:center; padding: 28px 16px; }
+    .entry-hero .big { font-size: 22px; font-weight: 800; }
+    .entry-hero .sm { font-size: 13px; opacity: .85; margin-top: 6px; }
+    form { padding: 16px; }
+    .ok-panel { text-align:center; padding: 40px 20px; }
+    .ok-panel .bi { font-size: 56px; color: var(--pri); }
+    .ok-panel .t { font-size: 20px; font-weight: 800; margin: 12px 0 6px; }
+    .ok-panel .s { color: var(--muted); font-size: 14px; }
+    .ok-panel .acts { margin-top: 18px; display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+  </style>
+</head>
+<body>
+  <div class="entry-hero">
+    <div class="big"><i class="bi bi-bookmark-heart"></i> 校园二手图书 · 求书登记</div>
+    <div class="sm">想找的书暂时没货？登记下来，找到后我们第一时间联系你</div>
+  </div>
+
+  <form id="wantedForm" onsubmit="return false">
+    <div class="card">
+      <datalist id="bookNamesList"></datalist>
+
+      <div class="field">
+        <label>书名 <span class="req">*</span></label>
+        <input class="input" id="wName" list="bookNamesList" placeholder="输入你想要的书名" />
+      </div>
+      <div class="field">
+        <label>需要数量</label>
+        <input class="input" id="wQty" type="number" min="1" max="99" step="1" value="1" />
+      </div>
+      <div class="field">
+        <label>联系方式（手机号 / QQ / 微信）<span class="req">*</span></label>
+        <input class="input" id="wContact" placeholder="找到书后用于联系你" />
+      </div>
+      <div class="field">
+        <label>备注（选填）</label>
+        <input class="input" id="wRemark" placeholder="如：作者 / 版本 / 品相要求" />
+      </div>
+    </div>
+
+    <button type="button" class="btn primary block" id="wSubmit" style="margin:0 14px 12px;width:calc(100% - 28px)">登记求书</button>
+    <a class="btn ghost sm" href="order-entry.html" style="margin:0 14px 20px;text-decoration:none;justify-content:center"><i class="bi bi-cart"></i> 我想直接下单买书</a>
+  </form>
+
+  <div class="ok-panel" id="okPanel" style="display:none"></div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const WORKER_BASE = "https://order-assistant-worker.loyce.workers.dev";
+
+    function $(sel){ return document.querySelector(sel); }
+    function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+
+    let toastTimer;
+    function toast(msg){ const t=$("#toast"); t.textContent=msg; t.classList.add("show"); clearTimeout(toastTimer); toastTimer=setTimeout(()=>t.classList.remove("show"),2200); }
+
+    // 加载历史书名做输入联想
+    fetch(WORKER_BASE + "/api/book-names").then(r=>r.json()).then(d=>{
+      if(d.ok) $("#bookNamesList").innerHTML = d.data.map(n=>`<option value="${esc(n)}"></option>`).join("");
+    }).catch(()=>{});
+
+    $("#wSubmit").onclick = async function(){
+      const name = $("#wName").value.trim();
+      const qty = parseInt($("#wQty").value, 10);
+      const contact = $("#wContact").value.trim();
+      const remark = $("#wRemark").value.trim();
+
+      if(!name) return toast("请填写书名");
+      if(!Number.isInteger(qty) || qty < 1 || qty > 99) return toast("数量需为 1~99 的整数");
+      if(!contact) return toast("请填写联系方式，方便找到书后联系你");
+
+      const btn=this; btn.disabled=true;
+      try{
+        const resp = await fetch(WORKER_BASE+"/api/wanted/public", {method:"POST", headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({book_name:name, quantity:qty, contact, remark})});
+        const rj = await resp.json().catch(()=>({}));
+        if(!rj.ok) throw new Error(rj.error || "提交失败");
+        document.getElementById("wantedForm").style.display="none";
+        const ok=$("#okPanel");
+        ok.style.display="block";
+        ok.innerHTML = `<div class="bi bi-check-circle-fill"></div>
+          <div class="t">登记成功！</div>
+          <div class="s">我们会留意「<b>${esc(name)}</b>」，找到后按你留下的方式联系你，请保持联系畅通。</div>
+          <div class="acts">
+            <button type="button" class="btn ghost sm" onclick="wantAgain()">再登记一本</button>
+          </div>`;
+      }catch(e){ toast(e.message || "提交失败，请稍后再试"); btn.disabled=false; }
+    };
+    // 再登记一本：清空书名/备注，保留联系方式
+    window.wantAgain = function(){
+      $("#okPanel").style.display="none";
+      document.getElementById("wantedForm").style.display="";
+      $("#wName").value = "";
+      $("#wQty").value = 1;
+      $("#wRemark").value = "";
+      $("#wSubmit").disabled = false;
+      setTimeout(()=>{ try{ $("#wName").focus(); }catch(e){} }, 60);
+    };
+  </script>
+</body>
+</html>
