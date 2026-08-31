@@ -1,0 +1,18 @@
+name: One-time D1 schema migration (add pickup columns)
+
+on:
+  workflow_dispatch: {} # 手动触发
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Run ALTER on D1
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: worker
+          command: d1 execute order-assistant-db --remote --command "ALTER TABLE orders ADD COLUMN delivery_method TEXT NOT NULL DEFAULT 'delivery'; ALTER TABLE orders ADD COLUMN pickup_location TEXT DEFAULT '';"
