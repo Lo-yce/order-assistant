@@ -486,19 +486,6 @@ function orderCard(o) {
     ${isEnded ? "" : actions}
   </div>`;
 }
-/* 点击复制联系方式 */
-window.App.copyText = async function (t) {
-  try {
-    await navigator.clipboard.writeText(t);
-    toast(`已复制：${t}`);
-  } catch (e) {
-    // 旧浏览器降级
-    const ta = document.createElement("textarea");
-    ta.value = t; document.body.appendChild(ta);
-    ta.select(); document.execCommand("copy"); ta.remove();
-    toast(`已复制：${t}`);
-  }
-};
 function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -655,6 +642,19 @@ window.App = {
   onBookInput,
   hideBookSuggest,
   pickBook,
+  // 点击复制联系方式（订单卡片用）
+  async copyText(t) {
+    try {
+      await navigator.clipboard.writeText(t);
+      toast(`已复制：${t}`);
+    } catch (e) {
+      // 旧浏览器降级
+      const ta = document.createElement("textarea");
+      ta.value = t; document.body.appendChild(ta);
+      ta.select(); document.execCommand("copy"); ta.remove();
+      toast(`已复制：${t}`);
+    }
+  },
   logout() {
     localStorage.removeItem("adminPwd");
     toast("已退出，正在刷新…");
