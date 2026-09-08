@@ -45,6 +45,7 @@
       </div>
       <div class="chips" id="statBuildingChips"></div>
       <div class="toolbar no-print" style="margin-top:2px">
+        <button class="btn primary sm" onclick="App.addStockItem()"><i class="bi bi-plus-lg"></i> 添加书本</button>
         <button class="btn ghost sm" onclick="App.exportStatsCsv()"><i class="bi bi-file-earmark-spreadsheet"></i> 导出 CSV</button>
         <button class="btn ghost sm" onclick="document.getElementById('invFile').click()"><i class="bi bi-upload"></i> 导入 Excel 库存</button>
         <button class="btn ghost sm" style="background:#fdeaea;color:var(--danger)" onclick="App.clearInventory()"><i class="bi bi-trash"></i> 清空库存</button>
@@ -126,14 +127,20 @@
   <!-- 库存快捷编辑弹窗 -->
   <div class="modal-mask" id="invEditMask">
     <div class="modal">
-      <h3>修改库存</h3>
-      <p id="invEditBook" style="font-weight:700;color:var(--text)"></p>
-      <div style="display:flex;align-items:center;gap:10px;margin-top:4px">
-        <button class="btn ghost sm" onclick="App.invEditStep(-1)" style="font-size:20px;flex:none">−</button>
-        <input class="input" type="number" id="invEditInput" min="0" step="1" style="width:100%;text-align:center;font-size:18px" />
-        <button class="btn ghost sm" onclick="App.invEditStep(1)" style="font-size:20px;flex:none">+</button>
+      <h3 id="invEditTitle">修改库存</h3>
+      <div class="field" style="margin:10px 0 0">
+        <label>书名</label>
+        <input class="input" id="invEditNameInput" placeholder="输入书名" />
       </div>
-      <p style="margin-top:10px;margin-bottom:0">找到多的书直接加库存，剩余数量会自动重算。</p>
+      <div class="field" style="margin:10px 0 0">
+        <label>库存数量</label>
+        <div style="display:flex;align-items:center;gap:10px">
+          <button class="btn ghost sm" onclick="App.invEditStep(-1)" style="font-size:20px;flex:none">−</button>
+          <input class="input" type="number" id="invEditInput" min="0" step="1" style="width:100%;text-align:center;font-size:18px" />
+          <button class="btn ghost sm" onclick="App.invEditStep(1)" style="font-size:20px;flex:none">+</button>
+        </div>
+      </div>
+      <p style="margin-top:10px;margin-bottom:0" id="invEditHint">找到多的书直接加库存，剩余数量会自动重算。</p>
       <div class="btns" style="margin-top:14px">
         <button class="btn ghost" onclick="App.closeInvEdit()">取消</button>
         <button class="btn primary" onclick="App.saveInvEdit()">保存</button>

@@ -104,6 +104,7 @@ export default {
         return await importInventory(db, body);
       }
       if (p === '/api/inventory' && method === 'DELETE') return await clearInventory(db);
+      if (p === '/api/inventory/item' && method === 'DELETE') return await deleteInventoryItem(db, await readBody(request));
 
       // 查我的订单（顾客按联系方式）
       if (p === '/api/my-orders' && method === 'GET') return await getMyOrders(db, url);
@@ -356,6 +357,14 @@ async function getInventory(db) {
 // 清空全部库存（用于重新导入前重置）
 async function clearInventory(db) {
   const { meta } = await db.prepare('DELETE FROM inventory').run();
+  return json({ ok: true, data: { deleted: meta.changes || 0 } });
+}
+
+// 删除单条库存（库存改名时由前端组合使用）
+async function deleteInventoryItem(db, body) {
+  const name = body && body.book_name != null ? String(body.book_name).trim() : '';
+  if (!name) return json({ ok: false, error: '缺少书名' }, 400);
+  const { meta } = await db.prepare('DELETE FROM inventory WHERE book_name = ?').bind(name).run();
   return json({ ok: true, data: { deleted: meta.changes || 0 } });
 }
 

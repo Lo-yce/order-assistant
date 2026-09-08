@@ -125,6 +125,7 @@ export async function onRequest({ request, env }) {
       if (method === 'POST') return await importInventory(await readBody(request));
       if (method === 'DELETE') return await clearInventory();
     }
+    if (p === '/api/inventory/item' && method === 'DELETE') return await deleteInventoryItem(await readBody(request));
 
     // ===== 顾客按联系方式查单 =====
     if (p === '/api/my-orders' && method === 'GET') return await getMyOrders(url);
@@ -397,6 +398,16 @@ async function clearInventory() {
   const list = await load('inventory');
   await save('inventory', []);
   return json({ ok: true, data: { deleted: list.length } });
+}
+
+// 删除单条库存（库存改名时由前端组合使用）
+async function deleteInventoryItem(body) {
+  const name = body && body.book_name != null ? String(body.book_name).trim() : '';
+  if (!name) return json({ ok: false, error: '缺少书名' }, 400);
+  const list = await load('inventory');
+  const keep = list.filter((v) => v.book_name !== name);
+  await save('inventory', keep);
+  return json({ ok: true, data: { deleted: list.length - keep.length } });
 }
 
 async function importInventory(body) {

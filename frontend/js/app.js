@@ -817,15 +817,28 @@ window.App.renderStats = function () {
   }).join("")}</div>`;
 };
 
-/* ---------- 库存快捷编辑 ---------- */
+/* ---------- 库存快捷编辑（新增 / 改名 / 改数量） ---------- */
+// 编辑已有库存：书名可改，数量可改
 window.App.editStock = function (bookName, currentStock) {
-  const initVal = currentStock == null ? 0 : currentStock;
-  $("#invEditBook").textContent = bookName;
-  const input = $("#invEditInput");
-  input.value = initVal;
+  window._invEditMode = "edit";
   window._invEditName = bookName;
+  $("#invEditTitle").textContent = "修改库存";
+  $("#invEditHint").textContent = "可修改书名或库存数量；改书名后原记录会被替换。剩余数量会自动重算。";
+  $("#invEditNameInput").value = bookName;
+  $("#invEditInput").value = currentStock == null ? 0 : currentStock;
   $("#invEditMask").classList.add("show");
-  setTimeout(() => { try { input.focus(); input.select(); } catch (e) {} }, 60);
+  setTimeout(() => { try { $("#invEditNameInput").focus(); } catch (e) {} }, 60);
+};
+// 单独添加一本书的库存
+window.App.addStockItem = function () {
+  window._invEditMode = "add";
+  window._invEditName = null;
+  $("#invEditTitle").textContent = "添加书本";
+  $("#invEditHint").textContent = "输入书名和现有库存数；同名书本将覆盖原有库存。";
+  $("#invEditNameInput").value = "";
+  $("#invEditInput").value = 0;
+  $("#invEditMask").classList.add("show");
+  setTimeout(() => { try { $("#invEditNameInput").focus(); } catch (e) {} }, 60);
 };
 window.App.invEditStep = function (d) {
   const input = $("#invEditInput");
@@ -837,31 +850,56 @@ window.App.closeInvEdit = function () {
   window._invEditWantedId = null; // 取消时不同步求书状态
 };
 window.App.saveInvEdit = async function () {
-  const name = window._invEditName;
+  const mode = window._invEditMode || "edit";
+  const oldName = window._invEditName;
+  const name = $("#invEditNameInput").value.trim();
   const v = parseInt($("#invEditInput").value, 10);
-  if (!name) return;
+  if (!name) { toast("请输入书名"); return; }
   if (!Number.isFinite(v) || v < 0) { toast("库存需为≥0的整数"); return; }
-  try {
-    await api("/api/inventory", "POST", { items: [{ book_name: name, stock: v }] });
-    $("#invEditMask").classList.remove("show");
-    // 从求书页「找到了，入库」进入：保存库存后把该求书标记为已找到
-    const wantedId = window._invEditWantedId;
-    window._invEditWantedId = null;
-    if (wantedId) {
-      try { await api(`/api/wanted/${wantedId}/status`, "PATCH", { status: "found" }); } catch (e) {}
-      await loadWanted();
-      if (state.currentTab === "wanted") renderWanted();
-      toast(`「${name}」已入库 ${v} 本并标记为已找到`);
-    } else {
-      toast(`「${name}」库存已设为 ${v}`);
-    }
-    loadStats();
-  } catch (e) { toast(e.message); }
+
+  const doSave = async () => {
+    try {
+      if (mode === "edit" && oldName && name !== oldName) {
+        // 改名：写新书名 + 删旧记录
+        await api("/api/inventory/item", "DELETE", { book_name: oldName });
+        await api("/api/inventory", "POST", { items: [{ book_name: name, stock: v }] });
+        toast(`已改名为「${name}」，库存 ${v} 本`);
+      } else {
+        await api("/api/inventory", "POST", { items: [{ book_name: name, stock: v }] });
+        if (mode === "add") toast(`已添加「${name}」库存 ${v} 本`);
+        else toast(`「${name}」库存已设为 ${v}`);
+      }
+      $("#invEditMask").classList.remove("show");
+      // 从求书页「找到了，入库」进入：保存库存后把该求书标记为已找到
+      const wantedId = window._invEditWantedId;
+      window._invEditWantedId = null;
+      if (wantedId) {
+        try { await api(`/api/wanted/${wantedId}/status`, "PATCH", { status: "found" }); } catch (e) {}
+        await loadWanted();
+        if (state.currentTab === "wanted") renderWanted();
+        toast(`「${name}」已入库 ${v} 本并标记为已找到`);
+      }
+      loadStats();
+    } catch (e) { toast(e.message); }
+  };
+
+  // 同名已存在库存时需确认覆盖
+  const renaming = mode === "edit" && oldName && name !== oldName;
+  const dup = (renaming || mode === "add")
+    ? state.stats.find((s) => s.book_name === name && s.stock != null)
+    : null;
+  if (dup) {
+    confirmModal("覆盖库存", `「${name}」已有库存 ${dup.stock} 本，保存后将覆盖为 ${v} 本。确定继续？`, doSave);
+  } else {
+    await doSave();
+  }
 };
-// 库存编辑弹窗：回车保存（脚本在 body 末尾加载，元素已就绪）
+// 库存编辑弹窗：书名/数量回车保存（脚本在 body 末尾加载，元素已就绪）
 (() => {
   const inp = document.getElementById("invEditInput");
+  const name = document.getElementById("invEditNameInput");
   if (inp) inp.addEventListener("keydown", (e) => { if (e.key === "Enter") window.App.saveInvEdit(); });
+  if (name) name.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("#invEditInput").focus(); } });
 })();
 
 /* ---------- 统计导出 CSV ---------- */
