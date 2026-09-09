@@ -15,4 +15,4 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: worker
-          command: d1 execute order-assistant-db --remote --command "ALTER TABLE orders ADD COLUMN delivery_method TEXT NOT NULL DEFAULT 'delivery'; ALTER TABLE orders ADD COLUMN pickup_location TEXT DEFAULT '';"
+          command: d1 execute order-assistant-db --remote --command "ALTER TABLE orders ADD COLUMN deleted_at TEXT; ALTER TABLE wanted_books ADD COLUMN deleted_at TEXT;"

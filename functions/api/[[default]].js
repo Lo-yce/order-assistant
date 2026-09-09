@@ -119,6 +119,12 @@ export async function onRequest({ request, env }) {
     if (p === '/api/book-stock' && method === 'GET') return await getBookStock();
     if (p === '/api/clear-done' && method === 'POST') return await clearDone();
 
+    // ===== 回收站（软删订单/求书：列表/还原/彻底删/清空） =====
+    if (p === '/api/recycle' && method === 'GET') return await getRecycle();
+    if (p === '/api/recycle/restore' && method === 'POST') return await recycleRestore(await readBody(request));
+    if (p === '/api/recycle/item' && method === 'DELETE') return await recyclePurgeItem(await readBody(request));
+    if (p === '/api/recycle/empty' && method === 'POST') return await recycleEmpty();
+
     // ===== 库存 =====
     if (p === '/api/inventory') {
       if (method === 'GET') return await getInventory();
@@ -214,13 +220,14 @@ function sortOrders(list) {
 async function getOrders(url) {
   const status = url.searchParams.get('status');
   let list = await load('orders');
+  list = list.filter((o) => !o.deleted_at); // 软删不显示
   if (status) list = list.filter((o) => o.status === status);
   return json({ ok: true, data: sortOrders(list) });
 }
 
 async function getOrder(id) {
   const list = await load('orders');
-  const found = list.find((o) => o.id === id);
+  const found = list.find((o) => o.id === id && !o.deleted_at);
   if (!found) return json({ ok: false, error: 'Not Found' }, 404);
   return json({ ok: true, data: found });
 }
@@ -229,8 +236,17 @@ async function createOrder(body) {
   const err = validateOrder(body);
   if (err) return json({ ok: false, error: err }, 400);
 
+  // 防刷单：同联系方式 10 分钟内最多 3 单
+  const contact = String(body.contact || '').trim();
+  const all = await load('orders');
+  const cutoff = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+  const recent = all.filter((o) => o.contact === contact && !o.deleted_at && o.created_at > cutoff);
+  if (recent.length >= 3) {
+    return json({ ok: false, error: '下单太频繁啦，请稍等几分钟再试（10 分钟内最多 3 单）' }, 429);
+  }
+
   const now = new Date().toISOString();
-  const list = await load('orders');
+  const list = all;
   const seq = await load('seq');
   const id = seq.order++;
   const method = normMethod(body);
@@ -242,7 +258,7 @@ async function createOrder(body) {
     sub_zone: method === 'delivery' ? body.sub_zone : '',
     pickup_location: method === 'self_pickup' ? String(body.pickup_location || DEFAULT_PICKUP).trim() : '',
     deliver_time: body.deliver_time || null,
-    contact: body.contact || '',
+    contact,
     remark: body.remark || '',
     status: 'pending',
     created_at: now,
@@ -293,19 +309,29 @@ async function updateStatus(id, body) {
 }
 
 async function delOrder(id) {
+  // 软删除：进回收站，可还原
   const list = await load('orders');
-  const idx = list.findIndex((o) => o.id === id);
+  const idx = list.findIndex((o) => o.id === id && !o.deleted_at);
   if (idx < 0) return json({ ok: false, error: 'Not Found' }, 404);
-  list.splice(idx, 1);
+  list[idx].deleted_at = new Date().toISOString();
+  list[idx].updated_at = list[idx].deleted_at;
   await save('orders', list);
   return json({ ok: true, data: { id } });
 }
 
 async function clearDone() {
+  // 软删除：已完成/已取消整批进回收站
   const list = await load('orders');
-  const keep = list.filter((o) => o.status !== 'done' && o.status !== 'cancelled'); // 同时清已完成与已取消
-  const deleted = list.length - keep.length;
-  await save('orders', keep);
+  const now = new Date().toISOString();
+  let deleted = 0;
+  for (const o of list) {
+    if ((o.status === 'done' || o.status === 'cancelled') && !o.deleted_at) {
+      o.deleted_at = now;
+      o.updated_at = now;
+      deleted++;
+    }
+  }
+  await save('orders', list);
   return json({ ok: true, data: { deleted } });
 }
 
@@ -317,7 +343,7 @@ async function getStats(url) {
 
   const map = {};
   for (const o of orders) {
-    if (o.status === 'cancelled') continue; // 已取消订单不计入需求统计
+    if (o.status === 'cancelled' || o.deleted_at) continue; // 已取消/已删除订单不计入需求统计
     if (building && o.delivery_building !== building) continue;
     for (const it of o.items || []) {
       const m = (map[it.book_name] = map[it.book_name] || { book_name: it.book_name, total_quantity: 0, order_count: 0, stock: null, remaining: null });
@@ -357,7 +383,7 @@ async function getBookStock() {
   const inventory = await load('inventory');
   const demand = {};
   for (const o of orders) {
-    if (o.status === 'cancelled') continue; // 已取消订单不计需求
+    if (o.status === 'cancelled' || o.deleted_at) continue; // 已取消/已删除订单不计需求
     for (const it of o.items || []) demand[it.book_name] = (demand[it.book_name] || 0) + it.quantity;
   }
   const list = [];
@@ -372,16 +398,20 @@ async function getBookStock() {
   return json({ ok: true, data: list });
 }
 
-/* 公开：顾客自助取消订单（仅待配送状态，联系方式需匹配） */
+/* 公开：顾客自助取消订单（仅待配送状态且下单 30 分钟内，联系方式需匹配） */
 async function cancelOrderPublic(id, body) {
   const contact = String((body && body.contact) || '').trim();
   if (!contact) return json({ ok: false, error: '缺少联系方式' }, 400);
   const list = await load('orders');
-  const idx = list.findIndex((o) => o.id === id);
+  const idx = list.findIndex((o) => o.id === id && !o.deleted_at);
   if (idx < 0) return json({ ok: false, error: '订单不存在' }, 404);
   const o = list[idx];
   if (o.contact !== contact) return json({ ok: false, error: '联系方式与订单不符，无法取消' }, 403);
   if (o.status !== 'pending') return json({ ok: false, error: '该订单已在处理中，无法自助取消，请直接联系我们' }, 400);
+  const created = new Date(o.created_at).getTime();
+  if (!Number.isFinite(created) || Date.now() - created > 30 * 60 * 1000) {
+    return json({ ok: false, error: '下单已超过 30 分钟，无法自助取消，请直接联系我们' }, 400);
+  }
   o.status = 'cancelled';
   o.updated_at = new Date().toISOString();
   await save('orders', list);
@@ -435,7 +465,7 @@ async function getMyOrders(url) {
   if (!contact) return json({ ok: false, error: '请填写下单时的联系方式' }, 400);
   const orders = await load('orders');
   const list = orders
-    .filter((o) => o.contact === contact)
+    .filter((o) => o.contact === contact && !o.deleted_at)
     .sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
     .slice(0, 20)
     .map((o) => ({
@@ -450,6 +480,7 @@ async function getMyOrders(url) {
 async function getWanted(url) {
   const status = url.searchParams.get('status');
   let list = await load('wanted');
+  list = list.filter((w) => !w.deleted_at); // 软删不显示
   if (status) list = list.filter((w) => w.status === status);
   // 待找到在前（先登的先找），已找到排后
   list = [...list].sort((a, b) => {
@@ -530,12 +561,83 @@ async function updateWantedStatus(id, body) {
 }
 
 async function delWanted(id) {
+  // 软删除：进回收站，可还原
   const list = await load('wanted');
-  const idx = list.findIndex((w) => w.id === id);
+  const idx = list.findIndex((w) => w.id === id && !w.deleted_at);
   if (idx < 0) return json({ ok: false, error: 'Not Found' }, 404);
-  list.splice(idx, 1);
+  list[idx].deleted_at = new Date().toISOString();
+  list[idx].updated_at = list[idx].deleted_at;
   await save('wanted', list);
   return json({ ok: true, data: { id } });
+}
+
+/* ---------- 回收站（软删数据：7 天后彻底清理） ---------- */
+const RECYCLE_TTL = 7 * 24 * 60 * 60 * 1000;
+
+// 惰性清理：读取回收站时顺手彻底删除超 7 天的软删数据
+async function recycleSweep() {
+  const cutoff = new Date(Date.now() - RECYCLE_TTL).toISOString();
+  const orders = await load('orders');
+  const keepO = orders.filter((o) => !o.deleted_at || o.deleted_at >= cutoff);
+  if (keepO.length !== orders.length) await save('orders', keepO);
+  const wanted = await load('wanted');
+  const keepW = wanted.filter((w) => !w.deleted_at || w.deleted_at >= cutoff);
+  if (keepW.length !== wanted.length) await save('wanted', keepW);
+}
+
+async function getRecycle() {
+  await recycleSweep();
+  const orders = (await load('orders')).filter((o) => o.deleted_at);
+  const wanted = (await load('wanted')).filter((w) => w.deleted_at);
+  return json({ ok: true, data: { orders, wanted } });
+}
+
+async function recycleRestore(body) {
+  const type = body && body.type;
+  const id = Number(body && body.id);
+  if (!['order', 'wanted'].includes(type) || !Number.isInteger(id)) return json({ ok: false, error: '参数无效' }, 400);
+  if (type === 'order') {
+    const list = await load('orders');
+    const item = list.find((o) => o.id === id && o.deleted_at);
+    if (!item) return json({ ok: false, error: '记录不存在' }, 404);
+    item.deleted_at = null;
+    await save('orders', list);
+  } else {
+    const list = await load('wanted');
+    const item = list.find((w) => w.id === id && w.deleted_at);
+    if (!item) return json({ ok: false, error: '记录不存在' }, 404);
+    item.deleted_at = null;
+    await save('wanted', list);
+  }
+  return json({ ok: true, data: { id } });
+}
+
+async function recyclePurgeItem(body) {
+  const type = body && body.type;
+  const id = Number(body && body.id);
+  if (!['order', 'wanted'].includes(type) || !Number.isInteger(id)) return json({ ok: false, error: '参数无效' }, 400);
+  if (type === 'order') {
+    const list = await load('orders');
+    const keep = list.filter((o) => !(o.id === id && o.deleted_at));
+    if (keep.length === list.length) return json({ ok: false, error: '记录不存在' }, 404);
+    await save('orders', keep);
+  } else {
+    const list = await load('wanted');
+    const keep = list.filter((w) => !(w.id === id && w.deleted_at));
+    if (keep.length === list.length) return json({ ok: false, error: '记录不存在' }, 404);
+    await save('wanted', keep);
+  }
+  return json({ ok: true, data: { id } });
+}
+
+async function recycleEmpty() {
+  const orders = await load('orders');
+  const keepO = orders.filter((o) => !o.deleted_at);
+  const wanted = await load('wanted');
+  const keepW = wanted.filter((w) => !w.deleted_at);
+  await save('orders', keepO);
+  await save('wanted', keepW);
+  return json({ ok: true, data: { deleted: orders.length - keepO.length + wanted.length - keepW.length } });
 }
 
 /* ---------- 一次性迁移：整体导入旧数据（会覆盖现有 KV 数据） ---------- */

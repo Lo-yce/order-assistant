@@ -12,7 +12,8 @@ CREATE TABLE IF NOT EXISTS orders (
   remark TEXT DEFAULT '',
   status TEXT NOT NULL DEFAULT 'pending',
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  deleted_at TEXT                                    -- 软删除标记（回收站，NULL=未删）
 );
 
 CREATE TABLE IF NOT EXISTS order_items (
@@ -46,7 +47,8 @@ CREATE TABLE IF NOT EXISTS wanted_books (
   remark TEXT DEFAULT '',
   status TEXT NOT NULL DEFAULT 'open',
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  deleted_at TEXT                                    -- 软删除标记（回收站，NULL=未删）
 );
 
 CREATE INDEX IF NOT EXISTS idx_wanted_status ON wanted_books(status);

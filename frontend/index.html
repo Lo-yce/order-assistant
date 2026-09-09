@@ -70,8 +70,13 @@
 
     <!-- 历史订单 -->
     <section class="page" id="page-history">
-      <button class="btn danger no-print" onclick="App.clearDone()"><i class="bi bi-trash3"></i> 清空已完成订单</button>
+      <div class="toolbar no-print">
+        <button class="btn danger sm" onclick="App.clearDone()"><i class="bi bi-trash3"></i> 清空已完成订单</button>
+        <span class="spacer"></span>
+        <button class="btn ghost sm" onclick="App.toggleRecycle()"><i class="bi bi-trash2"></i> 回收站</button>
+      </div>
       <div id="historyInner" style="margin-top:12px"></div>
+      <div id="recycleBox" style="display:none"></div>
     </section>
   </main>
 

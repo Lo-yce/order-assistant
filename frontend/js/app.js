@@ -1103,12 +1103,103 @@ function renderHistory() {
     : '<div class="empty">暂无已完成订单</div>';
 }
 window.App.clearDone = function () {
-  confirmModal("清空已完成订单", "将删除所有已完成和已取消的订单及其书单，不可恢复。确定继续？", async () => {
+  confirmModal("清空已完成订单", "将把所有已完成和已取消的订单移入回收站（保留 7 天）。确定继续？", async () => {
     try {
       const res = await api("/api/clear-done", "POST");
       await loadOrders();
       render();
-      toast(`已清空 ${res.deleted} 条订单`);
+      toast(`已移入回收站 ${res.deleted} 条订单`);
+    } catch (e) { toast(e.message); }
+  });
+};
+
+/* ---------- 回收站（软删订单/求书，7 天后自动清理） ---------- */
+window.App.toggleRecycle = async function () {
+  const box = $("#recycleBox");
+  const show = box.style.display === "none";
+  box.style.display = show ? "" : "none";
+  if (show) await renderRecycle();
+};
+
+async function renderRecycle() {
+  const box = $("#recycleBox");
+  box.innerHTML = '<div class="empty">加载中…</div>';
+  try {
+    const data = await api("/api/recycle");
+    const orders = data.orders || [];
+    const wanted = data.wanted || [];
+    if (!orders.length && !wanted.length) {
+      box.innerHTML = '<div class="card"><div class="empty">回收站是空的</div></div>';
+      return;
+    }
+    const fmtDel = (iso) => {
+      const d = new Date(iso);
+      return isNaN(d) ? "" : `删除于 ${d.getMonth() + 1}-${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+    };
+    let html = '<h2 style="margin:6px 0 12px;font-size:17px">回收站 <span style="font-size:12px;font-weight:400;color:var(--muted)">保留 7 天，过期自动清除</span></h2>';
+    if (orders.length) {
+      html += '<div class="card"><h3 style="font-size:14px;margin-bottom:8px">订单（' + orders.length + '）</h3>';
+      html += orders.map((o) => {
+        const place = o.delivery_method === "self_pickup"
+          ? `自提 · ${esc(o.pickup_location || "师生活动中心")}`
+          : `${esc(o.delivery_building)} ${esc(o.sub_zone)}`;
+        const items = (o.items || []).map((it) => `${esc(it.book_name)} ×${it.quantity}`).join("、");
+        return `<div class="recycle-item">
+          <div><b>#${o.id}</b> · ${place} · <span class="tag ${STATUS[o.status] ? STATUS[o.status].cls : "done"}" style="margin-left:0">${STATUS[o.status] ? STATUS[o.status].name : o.status}</span></div>
+          <div class="sub">${items || "（无书单）"}</div>
+          <div class="sub">${fmtDel(o.deleted_at)}</div>
+          <div class="btns" style="margin-top:6px">
+            <button class="btn ghost sm" onclick="App.recycleRestore('order',${o.id})"><i class="bi bi-arrow-counterclockwise"></i> 还原</button>
+            <button class="btn ghost sm" style="background:#fdeaea;color:var(--danger)" onclick="App.recyclePurge('order',${o.id})"><i class="bi bi-x-lg"></i> 彻底删除</button>
+          </div>
+        </div>`;
+      }).join("");
+      html += "</div>";
+    }
+    if (wanted.length) {
+      html += '<div class="card"><h3 style="font-size:14px;margin-bottom:8px">求书（' + wanted.length + '）</h3>';
+      html += wanted.map((w) => `
+        <div class="recycle-item">
+          <div><b>${esc(w.book_name)}</b> ×${w.quantity}</div>
+          <div class="sub">${fmtDel(w.deleted_at)}</div>
+          <div class="btns" style="margin-top:6px">
+            <button class="btn ghost sm" onclick="App.recycleRestore('wanted',${w.id})"><i class="bi bi-arrow-counterclockwise"></i> 还原</button>
+            <button class="btn ghost sm" style="background:#fdeaea;color:var(--danger)" onclick="App.recyclePurge('wanted',${w.id})"><i class="bi bi-x-lg"></i> 彻底删除</button>
+          </div>
+        </div>`).join("");
+      html += "</div>";
+    }
+    html += `<button class="btn danger sm" onclick="App.recycleEmpty()"><i class="bi bi-trash"></i> 清空回收站</button>`;
+    box.innerHTML = html;
+  } catch (e) { box.innerHTML = '<div class="empty">加载失败：' + esc(e.message) + "</div>"; }
+}
+
+window.App.recycleRestore = async function (type, id) {
+  try {
+    await api("/api/recycle/restore", "POST", { type, id });
+    toast("已还原");
+    await renderRecycle();
+    if (type === "order") await loadOrders();
+    else await loadWanted();
+  } catch (e) { toast(e.message); }
+};
+
+window.App.recyclePurge = function (type, id) {
+  confirmModal("彻底删除", "彻底删除后不可恢复（回收站内也无法找回）。确定继续？", async () => {
+    try {
+      await api("/api/recycle/item", "DELETE", { type, id });
+      toast("已彻底删除");
+      await renderRecycle();
+    } catch (e) { toast(e.message); }
+  });
+};
+
+window.App.recycleEmpty = function () {
+  confirmModal("清空回收站", "将彻底删除回收站内的全部记录，不可恢复。确定继续？", async () => {
+    try {
+      const res = await api("/api/recycle/empty", "POST");
+      toast(`已彻底删除 ${res.deleted} 条记录`);
+      await renderRecycle();
     } catch (e) { toast(e.message); }
   });
 };

@@ -227,8 +227,10 @@
         const place = o.delivery_method === "self_pickup"
           ? `<span class="m-tag">自提</span>${esc(o.pickup_location || "师生活动中心")}`
           : `<span class="m-tag">配送</span>${esc(o.delivery_building)} ${esc(o.sub_zone)}`;
-        const cancelBtn = o.status === "pending"
-          ? `<div style="margin-top:6px"><button type="button" class="btn ghost sm" style="background:#fdeaea;color:var(--danger)" onclick="cancelOrder(${o.id})"><i class="bi bi-x-circle"></i> 取消这单</button></div>` : "";
+        const canCancel = o.status === "pending" && o.created_at && (Date.now() - new Date(o.created_at).getTime() <= 30 * 60 * 1000);
+        const cancelBtn = canCancel
+          ? `<div style="margin-top:6px"><button type="button" class="btn ghost sm" style="background:#fdeaea;color:var(--danger)" onclick="cancelOrder(${o.id})"><i class="bi bi-x-circle"></i> 取消这单</button></div>`
+          : (o.status === "pending" ? `<div style="margin-top:6px;font-size:12px;color:var(--muted)">下单已超 30 分钟，如需取消请直接联系我们</div>` : "");
         return `
         <div class="my-order-item">
           <b>#${o.id}</b> · ${place}

@@ -97,6 +97,12 @@ export default {
       if (p === '/api/book-stock' && method === 'GET') return await getBookStock(db);
       if (p === '/api/clear-done' && method === 'POST') return await clearDone(db);
 
+      // 回收站（软删订单/求书：列表/还原/彻底删/清空）
+      if (p === '/api/recycle' && method === 'GET') return await getRecycle(db);
+      if (p === '/api/recycle/restore' && method === 'POST') return await recycleRestore(db, await readBody(request));
+      if (p === '/api/recycle/item' && method === 'DELETE') return await recyclePurgeItem(db, await readBody(request));
+      if (p === '/api/recycle/empty' && method === 'POST') return await recycleEmpty(db);
+
       // 库存
       if (p === '/api/inventory' && method === 'GET') return await getInventory(db);
       if (p === '/api/inventory' && method === 'POST') {
@@ -175,8 +181,8 @@ export default {
 
 async function getOrders(db, url) {
   const status = url.searchParams.get('status');
-  // 排序（配送路线友好）：进行中在前；待配送>配送中；同苑聚合+楼号自然序；尽快优先；自提最后
-  const where = status ? 'WHERE status = ?' : '';
+  // 排序（配送路线友好）：进行中在前；待配送>配送中；同苑聚合+楼号自然序；尽快优先；自提最后；软删不显示
+  const where = status ? 'WHERE deleted_at IS NULL AND status = ?' : 'WHERE deleted_at IS NULL';
   const binds = status ? [status] : [];
   // 楼号自然序（"18-2" → 18, 2）：自提/空楼号统一 99999（已被自提分组隔开）
   // 苑内时间优先：尽快(空时间)在前 → 时间升序 → 同时间才按楼号
@@ -207,7 +213,7 @@ async function getOrders(db, url) {
 }
 
 async function getOrder(db, id) {
-  const found = await db.prepare('SELECT * FROM orders WHERE id = ?').bind(id).first();
+  const found = await db.prepare('SELECT * FROM orders WHERE id = ? AND deleted_at IS NULL').bind(id).first();
   if (!found) return json({ ok: false, error: 'Not Found' }, 404);
   const { results: items } = await db.prepare('SELECT * FROM order_items WHERE order_id = ?').bind(id).all();
   found.items = items;
@@ -218,11 +224,21 @@ async function createOrder(db, body) {
   const err = validateOrder(body);
   if (err) return json({ ok: false, error: err }, 400);
 
+  // 防刷单：同联系方式 10 分钟内最多 3 单
+  const contact = String(body.contact || '').trim();
+  const cutoff = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+  const { results: recent } = await db.prepare(
+    'SELECT id FROM orders WHERE contact = ? AND created_at > ? AND deleted_at IS NULL LIMIT 3'
+  ).bind(contact, cutoff).all();
+  if (recent.length >= 3) {
+    return json({ ok: false, error: '下单太频繁啦，请稍等几分钟再试（10 分钟内最多 3 单）' }, 429);
+  }
+
   const method = normMethod(body);
   const now = new Date().toISOString();
   const t = db.prepare(
     'INSERT INTO orders (delivery_method, delivery_building, sub_zone, pickup_location, deliver_time, contact, remark, status, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)'
-  ).bind(method, method === 'delivery' ? body.delivery_building : '', method === 'delivery' ? body.sub_zone : '', method === 'self_pickup' ? String(body.pickup_location || DEFAULT_PICKUP).trim() : '', body.deliver_time || null, body.contact || '', body.remark || '', 'pending', now, now);
+  ).bind(method, method === 'delivery' ? body.delivery_building : '', method === 'delivery' ? body.sub_zone : '', method === 'self_pickup' ? String(body.pickup_location || DEFAULT_PICKUP).trim() : '', body.deliver_time || null, contact, body.remark || '', 'pending', now, now);
   const res = await t.run();
 
   await insertItems(db, res.meta.last_row_id, body.items);
@@ -256,17 +272,19 @@ async function updateStatus(db, id, body) {
 }
 
 async function delOrder(db, id) {
-  const found = await db.prepare('SELECT id FROM orders WHERE id = ?').bind(id).first();
+  // 软删除：进回收站，可还原
+  const found = await db.prepare('SELECT id FROM orders WHERE id = ? AND deleted_at IS NULL').bind(id).first();
   if (!found) return json({ ok: false, error: 'Not Found' }, 404);
-  await db.prepare('DELETE FROM order_items WHERE order_id = ?').bind(id).run();
-  await db.prepare('DELETE FROM orders WHERE id = ?').bind(id).run();
+  await db.prepare('UPDATE orders SET deleted_at=?, updated_at=? WHERE id=?')
+    .bind(new Date().toISOString(), new Date().toISOString(), id).run();
   return json({ ok: true, data: { id } });
 }
 
 async function clearDone(db) {
-  const before = await db.prepare("SELECT COUNT(*) as c FROM orders WHERE status IN ('done','cancelled')").first();
-  await db.prepare("DELETE FROM order_items WHERE order_id IN (SELECT id FROM orders WHERE status IN ('done','cancelled'))").run();
-  await db.prepare("DELETE FROM orders WHERE status IN ('done','cancelled')").run();
+  // 软删除：已完成/已取消整批进回收站
+  const now = new Date().toISOString();
+  const before = await db.prepare("SELECT COUNT(*) as c FROM orders WHERE status IN ('done','cancelled') AND deleted_at IS NULL").first();
+  await db.prepare("UPDATE orders SET deleted_at=?, updated_at=? WHERE status IN ('done','cancelled') AND deleted_at IS NULL").bind(now, now).run();
   return json({ ok: true, data: { deleted: before.c } });
 }
 
@@ -276,10 +294,10 @@ async function getStats(db, url) {
   const aggSql = building
     ? `SELECT i.book_name, SUM(i.quantity) AS total_quantity, COUNT(DISTINCT i.order_id) AS order_count
        FROM order_items i JOIN orders o ON o.id = i.order_id
-       WHERE o.delivery_building = ? AND o.status != 'cancelled' GROUP BY i.book_name`
+       WHERE o.delivery_building = ? AND o.status != 'cancelled' AND o.deleted_at IS NULL GROUP BY i.book_name`
     : `SELECT i.book_name, SUM(i.quantity) AS total_quantity, COUNT(DISTINCT i.order_id) AS order_count
        FROM order_items i JOIN orders o ON o.id = i.order_id
-       WHERE o.status != 'cancelled' GROUP BY i.book_name`;
+       WHERE o.status != 'cancelled' AND o.deleted_at IS NULL GROUP BY i.book_name`;
   const binds = building ? [building] : [];
   const { results: agg } = await db.prepare(aggSql).bind(...binds).all();
 
@@ -319,7 +337,7 @@ async function getBookNames(db) {
 async function getBookStock(db) {
   const { results: items } = await db.prepare(
     `SELECT i.book_name, SUM(i.quantity) AS q FROM order_items i
-     JOIN orders o ON o.id = i.order_id WHERE o.status != 'cancelled' GROUP BY i.book_name`
+     JOIN orders o ON o.id = i.order_id WHERE o.status != 'cancelled' AND o.deleted_at IS NULL GROUP BY i.book_name`
   ).all();
   const { results: inv } = await db.prepare('SELECT book_name, stock FROM inventory').all();
   const demand = {};
@@ -336,14 +354,18 @@ async function getBookStock(db) {
   return json({ ok: true, data: list });
 }
 
-// 公开：顾客自助取消订单（仅待配送状态，联系方式需匹配）
+// 公开：顾客自助取消订单（仅待配送状态且下单 30 分钟内，联系方式需匹配）
 async function cancelOrderPublic(db, id, body) {
   const contact = String((body && body.contact) || '').trim();
   if (!contact) return json({ ok: false, error: '缺少联系方式' }, 400);
-  const found = await db.prepare('SELECT id, contact, status FROM orders WHERE id = ?').bind(id).first();
+  const found = await db.prepare('SELECT id, contact, status, created_at FROM orders WHERE id = ? AND deleted_at IS NULL').bind(id).first();
   if (!found) return json({ ok: false, error: '订单不存在' }, 404);
   if (found.contact !== contact) return json({ ok: false, error: '联系方式与订单不符，无法取消' }, 403);
   if (found.status !== 'pending') return json({ ok: false, error: '该订单已在处理中，无法自助取消，请直接联系我们' }, 400);
+  const created = new Date(found.created_at).getTime();
+  if (!Number.isFinite(created) || Date.now() - created > 30 * 60 * 1000) {
+    return json({ ok: false, error: '下单已超过 30 分钟，无法自助取消，请直接联系我们' }, 400);
+  }
   await db.prepare("UPDATE orders SET status='cancelled', updated_at=? WHERE id=?")
     .bind(new Date().toISOString(), id).run();
   return json({ ok: true, data: { id } });
@@ -394,7 +416,7 @@ async function getMyOrders(db, url) {
   if (!contact) return json({ ok: false, error: '请填写下单时的联系方式' }, 400);
   const { results: orders } = await db.prepare(
     `SELECT id, delivery_method, delivery_building, sub_zone, pickup_location, deliver_time, status, created_at FROM orders
-     WHERE contact = ? ORDER BY created_at DESC LIMIT 20`
+     WHERE contact = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 20`
   ).bind(contact).all();
   const { results: items } = await db.prepare('SELECT * FROM order_items').all();
   const byOrder = {};
@@ -417,7 +439,7 @@ const WANTED_STATUSES = ['open', 'found'];
 
 async function getWanted(db, url) {
   const status = url.searchParams.get('status');
-  const where = status ? 'WHERE status = ?' : '';
+  const where = status ? 'WHERE deleted_at IS NULL AND status = ?' : 'WHERE deleted_at IS NULL';
   const binds = status ? [status] : [];
   // 待找到在前（先登的先找），已找到排后
   const { results } = await db.prepare(
@@ -451,7 +473,7 @@ async function updateWanted(db, id, body) {
 
 async function updateWantedStatus(db, id, body) {
   if (!WANTED_STATUSES.includes(body.status)) return json({ ok: false, error: '无效状态' }, 400);
-  const found = await db.prepare('SELECT id FROM wanted_books WHERE id = ?').bind(id).first();
+  const found = await db.prepare('SELECT id FROM wanted_books WHERE id = ? AND deleted_at IS NULL').bind(id).first();
   if (!found) return json({ ok: false, error: 'Not Found' }, 404);
   const now = new Date().toISOString();
   await db.prepare('UPDATE wanted_books SET status=?, updated_at=? WHERE id=?').bind(body.status, now, id).run();
@@ -459,9 +481,11 @@ async function updateWantedStatus(db, id, body) {
 }
 
 async function delWanted(db, id) {
-  const found = await db.prepare('SELECT id FROM wanted_books WHERE id = ?').bind(id).first();
+  // 软删除：进回收站，可还原
+  const found = await db.prepare('SELECT id FROM wanted_books WHERE id = ? AND deleted_at IS NULL').bind(id).first();
   if (!found) return json({ ok: false, error: 'Not Found' }, 404);
-  await db.prepare('DELETE FROM wanted_books WHERE id = ?').bind(id).run();
+  await db.prepare('UPDATE wanted_books SET deleted_at=?, updated_at=? WHERE id=?')
+    .bind(new Date().toISOString(), new Date().toISOString(), id).run();
   return json({ ok: true, data: { id } });
 }
 
@@ -470,6 +494,69 @@ function validateWanted(body) {
   if (!body.book_name || !String(body.book_name).trim()) return '书名为空';
   if (!Number.isInteger(Number(body.quantity)) || Number(body.quantity) < 1) return '数量需为≥1的整数';
   return null;
+}
+
+// ===== 回收站（软删数据：7 天后彻底清理） =====
+const RECYCLE_TTL = 7 * 24 * 60 * 60 * 1000;
+
+// 惰性清理：读取回收站时顺手彻底删除超 7 天的软删数据
+async function recycleSweep(db) {
+  const cutoff = new Date(Date.now() - RECYCLE_TTL).toISOString();
+  await db.prepare('DELETE FROM order_items WHERE order_id IN (SELECT id FROM orders WHERE deleted_at IS NOT NULL AND deleted_at < ?)').bind(cutoff).run();
+  await db.prepare('DELETE FROM orders WHERE deleted_at IS NOT NULL AND deleted_at < ?').bind(cutoff).run();
+  await db.prepare('DELETE FROM wanted_books WHERE deleted_at IS NOT NULL AND deleted_at < ?').bind(cutoff).run();
+}
+
+async function getRecycle(db) {
+  await recycleSweep(db);
+  const { results: orders } = await db.prepare(
+    'SELECT * FROM orders WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC'
+  ).all();
+  const { results: items } = await db.prepare('SELECT * FROM order_items').all();
+  const byOrder = {};
+  for (const it of items) {
+    (byOrder[it.order_id] = byOrder[it.order_id] || []).push({ book_name: it.book_name, quantity: it.quantity });
+  }
+  for (const o of orders) o.items = byOrder[o.id] || [];
+  const { results: wanted } = await db.prepare(
+    'SELECT * FROM wanted_books WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC'
+  ).all();
+  return json({ ok: true, data: { orders, wanted } });
+}
+
+async function recycleRestore(db, body) {
+  const type = body && body.type;
+  const id = Number(body && body.id);
+  if (!['order', 'wanted'].includes(type) || !Number.isInteger(id)) return json({ ok: false, error: '参数无效' }, 400);
+  const now = new Date().toISOString();
+  if (type === 'order') {
+    const r = await db.prepare('UPDATE orders SET deleted_at=NULL, updated_at=? WHERE id=? AND deleted_at IS NOT NULL').bind(now, id).run();
+    if (!r.meta.changes) return json({ ok: false, error: '记录不存在' }, 404);
+  } else {
+    const r = await db.prepare('UPDATE wanted_books SET deleted_at=NULL, updated_at=? WHERE id=? AND deleted_at IS NOT NULL').bind(now, id).run();
+    if (!r.meta.changes) return json({ ok: false, error: '记录不存在' }, 404);
+  }
+  return json({ ok: true, data: { id } });
+}
+
+async function recyclePurgeItem(db, body) {
+  const type = body && body.type;
+  const id = Number(body && body.id);
+  if (!['order', 'wanted'].includes(type) || !Number.isInteger(id)) return json({ ok: false, error: '参数无效' }, 400);
+  if (type === 'order') {
+    await db.prepare('DELETE FROM order_items WHERE order_id = ?').bind(id).run();
+    await db.prepare('DELETE FROM orders WHERE id = ? AND deleted_at IS NOT NULL').bind(id).run();
+  } else {
+    await db.prepare('DELETE FROM wanted_books WHERE id = ? AND deleted_at IS NOT NULL').bind(id).run();
+  }
+  return json({ ok: true, data: { id } });
+}
+
+async function recycleEmpty(db) {
+  await db.prepare('DELETE FROM order_items WHERE order_id IN (SELECT id FROM orders WHERE deleted_at IS NOT NULL)').run();
+  const o = await db.prepare('DELETE FROM orders WHERE deleted_at IS NOT NULL').run();
+  const w = await db.prepare('DELETE FROM wanted_books WHERE deleted_at IS NOT NULL').run();
+  return json({ ok: true, data: { deleted: (o.meta.changes || 0) + (w.meta.changes || 0) } });
 }
 
 // 顾客自助登记求书：必须留联系方式，数量限制 1~99 防滥用

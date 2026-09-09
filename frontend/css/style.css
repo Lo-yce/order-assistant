@@ -322,6 +322,10 @@ input, select, textarea { font: inherit; }
 }
 .order-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 
+/* 回收站条目 */
+.recycle-item { border: 1px dashed #d8e0e4; border-radius: 12px; padding: 10px 12px; margin-bottom: 8px; }
+.recycle-item .sub { font-size: 12px; color: var(--muted); margin-top: 2px; word-break: break-all; }
+
 /* 已取消：楼号/书名删除线 + 左条变灰 */
 .order-card.cancelled .zone, .order-card.cancelled .bk { text-decoration: line-through; color: var(--muted); }
 .order-card.cancelled::before { background: #c3cbd2; }
