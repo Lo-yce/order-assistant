@@ -52,15 +52,36 @@ function isPublicPath(p, method) {
 }
 
 // 后台鉴权：X-Admin-Key 必须等于配置的密码（未配置则一律拒绝，fail-closed）
-function checkAdmin(request, env) {
+async function checkAdmin(request, env, db) {
   if (!env.ADMIN_PASSWORD) {
     return json({ ok: false, error: '后台密码未配置：请在 Cloudflare 控制台为 Worker 设置 Secret 变量 ADMIN_PASSWORD', code: 'NO_PASSWORD' }, 401);
   }
   const key = request.headers.get('X-Admin-Key') || '';
   if (key !== env.ADMIN_PASSWORD) {
+    // 记录失败尝试（含 IP），便于发现有人猜密码
+    if (db) {
+      try {
+        await logAudit(db, request, 'login.fail', '', '密码错误，拒绝访问');
+      } catch (e) {}
+    }
     return json({ ok: false, error: '密码错误', code: 'UNAUTHORIZED' }, 401);
   }
   return null;
+}
+
+// ===== 操作日志（滚动保留 500 条） =====
+async function logAudit(db, request, action, target, detail, actorOverride) {
+  try {
+    await db.prepare('CREATE TABLE IF NOT EXISTS audit_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, actor TEXT NOT NULL, ip TEXT DEFAULT \'\', action TEXT NOT NULL, target TEXT DEFAULT \'\', detail TEXT DEFAULT \'\')').run();
+    const operator = request.headers.get('X-Operator') || '';
+    const key = request.headers.get('X-Admin-Key') || '';
+    const tail = key ? key.slice(-4) : ''; // 只记密码后4位，不存完整密码
+    const actor = actorOverride || operator || (tail ? `未署名(${tail})` : '未知');
+    const ip = request.headers.get('CF-Connecting-IP') || '';
+    await db.prepare('INSERT INTO audit_logs (at, actor, ip, action, target, detail) VALUES (?,?,?,?,?,?)')
+      .bind(new Date().toISOString(), actor, ip, action, target || '', detail || '').run();
+    await db.prepare('DELETE FROM audit_logs WHERE id NOT IN (SELECT id FROM audit_logs ORDER BY id DESC LIMIT 500)').run();
+  } catch (e) { /* 日志失败不影响主流程 */ }
 }
 
 export default {
@@ -87,7 +108,7 @@ async function handleRequest(request, env) {
     try {
       // 后台接口统一鉴权（公开接口除外）
       if (!isPublicPath(p, method)) {
-        const denied = checkAdmin(request, env);
+        const denied = await checkAdmin(request, env, db);
         if (denied) return denied;
       }
 
@@ -96,7 +117,7 @@ async function handleRequest(request, env) {
         if (method === 'GET') return await getOrders(db, url);
         if (method === 'POST') {
           const body = await readBody(request);
-          return await createOrder(db, body);
+          return await createOrder(db, request, body);
         }
       }
 
@@ -104,19 +125,23 @@ async function handleRequest(request, env) {
       if (p === '/api/stats' && method === 'GET') return await getStats(db, url);
       if (p === '/api/book-names' && method === 'GET') return await getBookNames(db);
       if (p === '/api/book-stock' && method === 'GET') return await getBookStock(db);
-      if (p === '/api/clear-done' && method === 'POST') return await clearDone(db);
+      if (p === '/api/clear-done' && method === 'POST') return await clearDone(db, request);
 
       // 回收站（软删订单/求书：列表/还原/彻底删/清空）
       if (p === '/api/recycle' && method === 'GET') return await getRecycle(db);
-      if (p === '/api/recycle/restore' && method === 'POST') return await recycleRestore(db, await readBody(request));
-      if (p === '/api/recycle/item' && method === 'DELETE') return await recyclePurgeItem(db, await readBody(request));
-      if (p === '/api/recycle/empty' && method === 'POST') return await recycleEmpty(db);
+      if (p === '/api/recycle/restore' && method === 'POST') return await recycleRestore(db, request, await readBody(request));
+      if (p === '/api/recycle/item' && method === 'DELETE') return await recyclePurgeItem(db, request, await readBody(request));
+      if (p === '/api/recycle/empty' && method === 'POST') return await recycleEmpty(db, request);
 
       // 备份（列表/下载/恢复/手动立即备份）
       if (p === '/api/backups' && method === 'GET') return await listBackups(db);
-      if (p === '/api/backups/now' && method === 'POST') return json({ ok: true, data: await doBackup(db) });
+      if (p === '/api/backups/now' && method === 'POST') {
+        const r = await doBackup(db);
+        await logAudit(db, request, 'backup.create', r.day, `手动备份 ${Math.round(r.bytes / 1024)} KB`);
+        return json({ ok: true, data: r });
+      }
       let bm = p.match(/^\/api\/backups\/(\d{4}-\d{2}-\d{2})\/restore$/);
-      if (bm && method === 'POST') return await restoreBackup(db, bm[1]);
+      if (bm && method === 'POST') return await restoreBackup(db, request, bm[1]);
       bm = p.match(/^\/api\/backups\/(\d{4}-\d{2}-\d{2})$/);
       if (bm && method === 'GET') return await getBackup(db, bm[1]);
 
@@ -124,10 +149,10 @@ async function handleRequest(request, env) {
       if (p === '/api/inventory' && method === 'GET') return await getInventory(db);
       if (p === '/api/inventory' && method === 'POST') {
         const body = await readBody(request);
-        return await importInventory(db, body);
+        return await importInventory(db, request, body);
       }
-      if (p === '/api/inventory' && method === 'DELETE') return await clearInventory(db);
-      if (p === '/api/inventory/item' && method === 'DELETE') return await deleteInventoryItem(db, await readBody(request));
+      if (p === '/api/inventory' && method === 'DELETE') return await clearInventory(db, request);
+      if (p === '/api/inventory/item' && method === 'DELETE') return await deleteInventoryItem(db, request, await readBody(request));
 
       // 查我的订单（顾客按联系方式）
       if (p === '/api/my-orders' && method === 'GET') return await getMyOrders(db, url);
@@ -136,27 +161,27 @@ async function handleRequest(request, env) {
       if (p === '/api/wanted' && method === 'GET') return await getWanted(db, url);
       if (p === '/api/wanted' && method === 'POST') {
         const body = await readBody(request);
-        return await createWanted(db, body);
+        return await createWanted(db, request, body);
       }
 
       // 顾客自助登记求书（公开接口，无需密码）
       if (p === '/api/wanted/public' && method === 'POST') {
         const body = await readBody(request);
-        return await createWantedPublic(db, body);
+        return await createWantedPublic(db, request, body);
       }
 
       // 状态更新 /api/orders/:id/status
       let m = p.match(/^\/api\/orders\/(\d+)\/status$/);
       if (m && method === 'PATCH') {
         const body = await readBody(request);
-        return await updateStatus(db, Number(m[1]), body);
+        return await updateStatus(db, request, Number(m[1]), body);
       }
 
       // 顾客自助取消（公开）
       m = p.match(/^\/api\/orders\/(\d+)\/cancel$/);
       if (m && method === 'POST') {
         const body = await readBody(request);
-        return await cancelOrderPublic(db, Number(m[1]), body);
+        return await cancelOrderPublic(db, request, Number(m[1]), body);
       }
 
       // 单个订单 /api/orders/:id
@@ -166,16 +191,16 @@ async function handleRequest(request, env) {
         if (method === 'GET') return await getOrder(db, id);
         if (method === 'PUT') {
           const body = await readBody(request);
-          return await updateOrder(db, id, body);
+          return await updateOrder(db, request, id, body);
         }
-        if (method === 'DELETE') return await delOrder(db, id);
+        if (method === 'DELETE') return await delOrder(db, request, id);
       }
 
       // 需求书单状态 /api/wanted/:id/status
       m = p.match(/^\/api\/wanted\/(\d+)\/status$/);
       if (m && method === 'PATCH') {
         const body = await readBody(request);
-        return await updateWantedStatus(db, Number(m[1]), body);
+        return await updateWantedStatus(db, request, Number(m[1]), body);
       }
 
       // 单条求书 /api/wanted/:id
@@ -184,10 +209,13 @@ async function handleRequest(request, env) {
         const id = Number(m[1]);
         if (method === 'PUT') {
           const body = await readBody(request);
-          return await updateWanted(db, id, body);
+          return await updateWanted(db, request, id, body);
         }
-        if (method === 'DELETE') return await delWanted(db, id);
+        if (method === 'DELETE') return await delWanted(db, request, id);
       }
+
+      // 操作日志查询
+      if (p === '/api/audit' && method === 'GET') return await getAudit(db);
 
       return json({ ok: false, error: 'Not Found' }, 404);
     } catch (e) {
@@ -238,7 +266,7 @@ async function getOrder(db, id) {
   return json({ ok: true, data: found });
 }
 
-async function createOrder(db, body) {
+async function createOrder(db, request, body) {
   const err = validateOrder(body);
   if (err) return json({ ok: false, error: err }, 400);
 
@@ -260,10 +288,11 @@ async function createOrder(db, body) {
   const res = await t.run();
 
   await insertItems(db, res.meta.last_row_id, body.items);
+  await logAudit(db, request, 'order.create', `#${Number(res.meta.last_row_id)}`, `${body.delivery_building || '自提'} ${body.sub_zone || String(body.pickup_location || '').trim()} ${body.items.length} 本书`, '顾客');
   return json({ ok: true, data: { id: Number(res.meta.last_row_id) } });
 }
 
-async function updateOrder(db, id, body) {
+async function updateOrder(db, request, id, body) {
   const err = validateOrder(body);
   if (err) return json({ ok: false, error: err }, 400);
   const found = await db.prepare('SELECT id FROM orders WHERE id = ?').bind(id).first();
@@ -277,32 +306,36 @@ async function updateOrder(db, id, body) {
 
   await db.prepare('DELETE FROM order_items WHERE order_id = ?').bind(id).run();
   await insertItems(db, id, body.items);
+  await logAudit(db, request, 'order.update', `#${id}`, `改为 ${method === 'delivery' ? body.delivery_building + ' ' + body.sub_zone : '自提·' + String(body.pickup_location || '').trim()}，${body.items.length} 本书`);
   return json({ ok: true, data: { id } });
 }
 
-async function updateStatus(db, id, body) {
+async function updateStatus(db, request, id, body) {
   if (!STATUSES.includes(body.status)) return json({ ok: false, error: '无效状态' }, 400);
   const found = await db.prepare('SELECT id FROM orders WHERE id = ?').bind(id).first();
   if (!found) return json({ ok: false, error: 'Not Found' }, 404);
   const now = new Date().toISOString();
   await db.prepare('UPDATE orders SET status=?, updated_at=? WHERE id=?').bind(body.status, now, id).run();
+  await logAudit(db, request, 'order.status', `#${id}`, `状态 → ${body.status}`);
   return json({ ok: true, data: { id, status: body.status } });
 }
 
-async function delOrder(db, id) {
+async function delOrder(db, request, id) {
   // 软删除：进回收站，可还原
   const found = await db.prepare('SELECT id FROM orders WHERE id = ? AND deleted_at IS NULL').bind(id).first();
   if (!found) return json({ ok: false, error: 'Not Found' }, 404);
   await db.prepare('UPDATE orders SET deleted_at=?, updated_at=? WHERE id=?')
     .bind(new Date().toISOString(), new Date().toISOString(), id).run();
+  await logAudit(db, request, 'order.delete', `#${id}`, '移入回收站');
   return json({ ok: true, data: { id } });
 }
 
-async function clearDone(db) {
+async function clearDone(db, request) {
   // 软删除：已完成/已取消整批进回收站
   const now = new Date().toISOString();
   const before = await db.prepare("SELECT COUNT(*) as c FROM orders WHERE status IN ('done','cancelled') AND deleted_at IS NULL").first();
   await db.prepare("UPDATE orders SET deleted_at=?, updated_at=? WHERE status IN ('done','cancelled') AND deleted_at IS NULL").bind(now, now).run();
+  await logAudit(db, request, 'order.clearDone', '', `已完成/已取消 ${before.c} 单移入回收站`);
   return json({ ok: true, data: { deleted: before.c } });
 }
 
@@ -373,7 +406,7 @@ async function getBookStock(db) {
 }
 
 // 公开：顾客自助取消订单（仅待配送状态且下单 30 分钟内，联系方式需匹配）
-async function cancelOrderPublic(db, id, body) {
+async function cancelOrderPublic(db, request, id, body) {
   const contact = String((body && body.contact) || '').trim();
   if (!contact) return json({ ok: false, error: '缺少联系方式' }, 400);
   const found = await db.prepare('SELECT id, contact, status, created_at FROM orders WHERE id = ? AND deleted_at IS NULL').bind(id).first();
@@ -386,6 +419,7 @@ async function cancelOrderPublic(db, id, body) {
   }
   await db.prepare("UPDATE orders SET status='cancelled', updated_at=? WHERE id=?")
     .bind(new Date().toISOString(), id).run();
+  await logAudit(db, request, 'order.cancel', `#${id}`, '顾客自助取消', '顾客');
   return json({ ok: true, data: { id } });
 }
 
@@ -395,21 +429,23 @@ async function getInventory(db) {
 }
 
 // 清空全部库存（用于重新导入前重置）
-async function clearInventory(db) {
+async function clearInventory(db, request) {
   const { meta } = await db.prepare('DELETE FROM inventory').run();
+  await logAudit(db, request, 'inventory.clear', '', `清空库存 ${meta.changes || 0} 条`);
   return json({ ok: true, data: { deleted: meta.changes || 0 } });
 }
 
 // 删除单条库存（库存改名时由前端组合使用）
-async function deleteInventoryItem(db, body) {
+async function deleteInventoryItem(db, request, body) {
   const name = body && body.book_name != null ? String(body.book_name).trim() : '';
   if (!name) return json({ ok: false, error: '缺少书名' }, 400);
   const { meta } = await db.prepare('DELETE FROM inventory WHERE book_name = ?').bind(name).run();
+  await logAudit(db, request, 'inventory.delete', name, `删除库存记录 ${meta.changes || 0} 条`);
   return json({ ok: true, data: { deleted: meta.changes || 0 } });
 }
 
 // 批量导入库存：{ items: [{book_name, stock}] }，同书名覆盖
-async function importInventory(db, body) {
+async function importInventory(db, request, body) {
   const items = Array.isArray(body) ? body : body && body.items;
   if (!Array.isArray(items) || items.length === 0) return json({ ok: false, error: '请提供非空的 items 数组' }, 400);
   const clean = [];
@@ -425,7 +461,15 @@ async function importInventory(db, body) {
     'INSERT INTO inventory (book_name, stock, updated_at) VALUES (?,?,?) ON CONFLICT(book_name) DO UPDATE SET stock=excluded.stock, updated_at=excluded.updated_at'
   );
   for (const c of clean) await stmt.bind(c.name, c.stock, now).run();
+  await logAudit(db, request, 'inventory.set', clean.length > 1 ? `${clean.length} 本书` : clean[0].name, clean.map((c) => `${c.name}=${c.stock}`).join('、').slice(0, 200));
   return json({ ok: true, data: { imported: clean.length } });
+}
+
+// 操作日志查询（最近 200 条）
+async function getAudit(db) {
+  await db.prepare("CREATE TABLE IF NOT EXISTS audit_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, actor TEXT NOT NULL, ip TEXT DEFAULT '', action TEXT NOT NULL, target TEXT DEFAULT '', detail TEXT DEFAULT '')").run();
+  const { results } = await db.prepare('SELECT * FROM audit_logs ORDER BY id DESC LIMIT 200').all();
+  return json({ ok: true, data: results });
 }
 
 // 顾客按联系方式查自己的订单（最多 20 条）
@@ -467,17 +511,18 @@ async function getWanted(db, url) {
   return json({ ok: true, data: results });
 }
 
-async function createWanted(db, body) {
+async function createWanted(db, request, body) {
   const err = validateWanted(body);
   if (err) return json({ ok: false, error: err }, 400);
   const now = new Date().toISOString();
   const res = await db.prepare(
     'INSERT INTO wanted_books (book_name, quantity, contact, remark, status, created_at, updated_at) VALUES (?,?,?,?,?,?,?)'
   ).bind(String(body.book_name).trim(), Number(body.quantity), body.contact || '', body.remark || '', 'open', now, now).run();
+  await logAudit(db, request, 'wanted.create', String(body.book_name).trim(), `×${Number(body.quantity)}`);
   return json({ ok: true, data: { id: Number(res.meta.last_row_id) } });
 }
 
-async function updateWanted(db, id, body) {
+async function updateWanted(db, request, id, body) {
   const err = validateWanted(body);
   if (err) return json({ ok: false, error: err }, 400);
   const found = await db.prepare('SELECT id FROM wanted_books WHERE id = ?').bind(id).first();
@@ -486,24 +531,27 @@ async function updateWanted(db, id, body) {
   await db.prepare(
     'UPDATE wanted_books SET book_name=?, quantity=?, contact=?, remark=?, updated_at=? WHERE id=?'
   ).bind(String(body.book_name).trim(), Number(body.quantity), body.contact || '', body.remark || '', now, id).run();
+  await logAudit(db, request, 'wanted.update', `#${id}`, `${String(body.book_name).trim()} ×${Number(body.quantity)}`);
   return json({ ok: true, data: { id } });
 }
 
-async function updateWantedStatus(db, id, body) {
+async function updateWantedStatus(db, request, id, body) {
   if (!WANTED_STATUSES.includes(body.status)) return json({ ok: false, error: '无效状态' }, 400);
   const found = await db.prepare('SELECT id FROM wanted_books WHERE id = ? AND deleted_at IS NULL').bind(id).first();
   if (!found) return json({ ok: false, error: 'Not Found' }, 404);
   const now = new Date().toISOString();
   await db.prepare('UPDATE wanted_books SET status=?, updated_at=? WHERE id=?').bind(body.status, now, id).run();
+  await logAudit(db, request, 'wanted.status', `#${id}`, `状态 → ${body.status}`);
   return json({ ok: true, data: { id, status: body.status } });
 }
 
-async function delWanted(db, id) {
+async function delWanted(db, request, id) {
   // 软删除：进回收站，可还原
   const found = await db.prepare('SELECT id FROM wanted_books WHERE id = ? AND deleted_at IS NULL').bind(id).first();
   if (!found) return json({ ok: false, error: 'Not Found' }, 404);
   await db.prepare('UPDATE wanted_books SET deleted_at=?, updated_at=? WHERE id=?')
     .bind(new Date().toISOString(), new Date().toISOString(), id).run();
+  await logAudit(db, request, 'wanted.delete', `#${id}`, '移入回收站');
   return json({ ok: true, data: { id } });
 }
 
@@ -542,7 +590,7 @@ async function getRecycle(db) {
   return json({ ok: true, data: { orders, wanted } });
 }
 
-async function recycleRestore(db, body) {
+async function recycleRestore(db, request, body) {
   const type = body && body.type;
   const id = Number(body && body.id);
   if (!['order', 'wanted'].includes(type) || !Number.isInteger(id)) return json({ ok: false, error: '参数无效' }, 400);
@@ -554,10 +602,11 @@ async function recycleRestore(db, body) {
     const r = await db.prepare('UPDATE wanted_books SET deleted_at=NULL, updated_at=? WHERE id=? AND deleted_at IS NOT NULL').bind(now, id).run();
     if (!r.meta.changes) return json({ ok: false, error: '记录不存在' }, 404);
   }
+  await logAudit(db, request, 'recycle.restore', `${type === 'order' ? '订单' : '求书'}#${id}`, '从回收站还原');
   return json({ ok: true, data: { id } });
 }
 
-async function recyclePurgeItem(db, body) {
+async function recyclePurgeItem(db, request, body) {
   const type = body && body.type;
   const id = Number(body && body.id);
   if (!['order', 'wanted'].includes(type) || !Number.isInteger(id)) return json({ ok: false, error: '参数无效' }, 400);
@@ -567,14 +616,17 @@ async function recyclePurgeItem(db, body) {
   } else {
     await db.prepare('DELETE FROM wanted_books WHERE id = ? AND deleted_at IS NOT NULL').bind(id).run();
   }
+  await logAudit(db, request, 'recycle.purge', `${type === 'order' ? '订单' : '求书'}#${id}`, '彻底删除');
   return json({ ok: true, data: { id } });
 }
 
-async function recycleEmpty(db) {
+async function recycleEmpty(db, request) {
   await db.prepare('DELETE FROM order_items WHERE order_id IN (SELECT id FROM orders WHERE deleted_at IS NOT NULL)').run();
   const o = await db.prepare('DELETE FROM orders WHERE deleted_at IS NOT NULL').run();
   const w = await db.prepare('DELETE FROM wanted_books WHERE deleted_at IS NOT NULL').run();
-  return json({ ok: true, data: { deleted: (o.meta.changes || 0) + (w.meta.changes || 0) } });
+  const n = (o.meta.changes || 0) + (w.meta.changes || 0);
+  await logAudit(db, request, 'recycle.empty', '', `清空回收站 ${n} 条`);
+  return json({ ok: true, data: { deleted: n } });
 }
 
 // ===== 每日自动备份（保留近 7 天，可下载/恢复） =====
@@ -623,7 +675,7 @@ async function getBackup(db, day) {
 }
 
 // 从某天备份恢复（覆盖当前全部数据，原子执行）
-async function restoreBackup(db, day) {
+async function restoreBackup(db, request, day) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return json({ ok: false, error: '日期格式无效' }, 400);
   const row = await db.prepare('SELECT payload FROM backups WHERE day = ?').bind(day).first();
   if (!row) return json({ ok: false, error: '备份不存在' }, 404);
@@ -659,11 +711,12 @@ async function restoreBackup(db, day) {
   }
   // 单次 batch = 单事务：任一失败全部回滚，不会出现清空后没插回的中间态
   await db.batch(stmts);
+  await logAudit(db, request, 'backup.restore', day, `恢复备份：订单 ${orders.length} / 库存 ${inv.length} / 求书 ${wanted.length}`);
   return json({ ok: true, data: { day, orders: orders.length, items: items.length, inventory: inv.length, wanted: wanted.length } });
 }
 
 // 顾客自助登记求书：必须留联系方式，数量限制 1~99 防滥用
-async function createWantedPublic(db, body) {
+async function createWantedPublic(db, request, body) {
   const err = validateWanted(body);
   if (err) return json({ ok: false, error: err }, 400);
   const contact = String(body.contact || '').trim();
@@ -673,6 +726,7 @@ async function createWantedPublic(db, body) {
   const res = await db.prepare(
     'INSERT INTO wanted_books (book_name, quantity, contact, remark, status, created_at, updated_at) VALUES (?,?,?,?,?,?,?)'
   ).bind(String(body.book_name).trim(), Number(body.quantity), contact, body.remark || '', 'open', now, now).run();
+  await logAudit(db, request, 'wanted.create', String(body.book_name).trim(), `×${Number(body.quantity)}`, '顾客');
   return json({ ok: true, data: { id: Number(res.meta.last_row_id) } });
 }
 

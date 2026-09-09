@@ -73,10 +73,12 @@
       <div class="toolbar no-print">
         <button class="btn danger sm" onclick="App.clearDone()"><i class="bi bi-trash3"></i> 清空已完成订单</button>
         <span class="spacer"></span>
+        <button class="btn ghost sm" onclick="App.toggleAudit()"><i class="bi bi-card-list"></i> 日志</button>
         <button class="btn ghost sm" onclick="App.toggleRecycle()"><i class="bi bi-trash2"></i> 回收站</button>
         <button class="btn ghost sm" onclick="App.toggleBackups()"><i class="bi bi-cloud-arrow-down"></i> 备份</button>
       </div>
       <div id="historyInner" style="margin-top:12px"></div>
+      <div id="auditBox" style="display:none"></div>
       <div id="recycleBox" style="display:none"></div>
       <div id="backupBox" style="display:none"></div>
     </section>

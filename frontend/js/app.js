@@ -106,10 +106,24 @@ function submitPwd() {
 $("#pwdInput").addEventListener("keydown", (e) => { if (e.key === "Enter") submitPwd(); });
 
 /* ---------- API ---------- */
+// 操作人署名：首次使用时询问一次（操作日志里区分团队成员）
+function getMyName() {
+  return localStorage.getItem("myName") || "";
+}
+window.App.setMyName = function () {
+  const name = prompt("输入你的昵称（用于操作日志署名，本机记住）：", getMyName());
+  if (name && name.trim()) {
+    localStorage.setItem("myName", name.trim());
+    toast(`已署名为「${name.trim()}」`);
+  }
+};
+
 async function api(path, method = "GET", body, _retried) {
   const headers = { "Content-Type": "application/json" };
   const pwd = getPwd();
   if (pwd) headers["X-Admin-Key"] = pwd;
+  const myName = getMyName();
+  if (myName) headers["X-Operator"] = encodeURIComponent(myName);
   const res = await fetch(WORKER_BASE + path, {
     method,
     headers,
@@ -1269,6 +1283,74 @@ window.App.restoreBackup = function (day) {
     }
   );
 };
+
+/* ---------- 操作日志（谁在何时做了什么） ---------- */
+const AUDIT_NAMES = {
+  'order.create': '新建订单',
+  'order.update': '编辑订单',
+  'order.status': '变更状态',
+  'order.cancel': '取消订单',
+  'order.delete': '删除订单',
+  'order.clearDone': '清空已完成',
+  'inventory.set': '设置库存',
+  'inventory.clear': '清空库存',
+  'inventory.delete': '删除库存',
+  'wanted.create': '登记求书',
+  'wanted.update': '编辑求书',
+  'wanted.status': '求书状态',
+  'wanted.delete': '删除求书',
+  'recycle.restore': '回收站还原',
+  'recycle.purge': '彻底删除',
+  'recycle.empty': '清空回收站',
+  'backup.create': '生成备份',
+  'backup.restore': '恢复备份',
+  'login.fail': '密码错误',
+};
+
+window.App.toggleAudit = async function () {
+  const box = $("#auditBox");
+  const show = box.style.display === "none";
+  box.style.display = show ? "" : "none";
+  if (show) await renderAudit();
+};
+window.App.renderAudit = renderAudit; // 供日志区内按钮刷新用
+
+async function renderAudit() {
+  const box = $("#auditBox");
+  box.innerHTML = '<div class="empty">加载中…</div>';
+  try {
+    const logs = await api("/api/audit");
+    if (!logs.length) {
+      box.innerHTML = '<div class="card"><div class="empty">暂无日志</div></div>';
+      return;
+    }
+    const signed = getMyName();
+    const fmtAt = (iso) => {
+      const d = new Date(iso);
+      if (isNaN(d)) return iso;
+      const p = (n) => String(n).padStart(2, "0");
+      const today = new Date();
+      return `${d.getMonth() + 1}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}${d.toDateString() === today.toDateString() ? "" : ""}`;
+    };
+    box.innerHTML = `
+      <h2 style="margin:6px 0 12px;font-size:17px">操作日志 <span style="font-size:12px;font-weight:400;color:var(--muted)">最近 ${logs.length} 条</span></h2>
+      <div class="card">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:13px">
+          <i class="bi bi-person-badge" style="color:var(--pri)"></i>
+          <span>当前署名：<b>${esc(signed || "未署名")}</b></span>
+          <button class="btn ghost sm" style="margin-left:auto" onclick="App.setMyName(); setTimeout(() => App.renderAudit(), 300)"><i class="bi bi-pencil"></i> 修改署名</button>
+        </div>
+        ${logs.map((l) => `
+          <div class="audit-item">
+            <span class="audit-time">${fmtAt(l.at)}</span>
+            <span class="audit-actor">${esc(l.actor)}</span>
+            <span class="audit-action">${AUDIT_NAMES[l.action] || l.action}</span>
+            <span class="audit-target">${esc(l.target)}</span>
+            ${l.detail ? `<div class="audit-detail">${esc(l.detail)}</div>` : ""}
+          </div>`).join("")}
+      </div>`;
+  } catch (e) { box.innerHTML = '<div class="empty">加载失败：' + esc(e.message) + "</div>"; }
+}
 
 /* ---------- 分享下单链接 ---------- */
 window.App.shareLink = async function () {

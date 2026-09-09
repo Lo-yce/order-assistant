@@ -58,15 +58,33 @@ function isPublicPath(p, method) {
 }
 
 // 后台鉴权：X-Admin-Key 必须等于环境变量 ADMIN_PASSWORD（fail-closed）
-function checkAdmin(request, env) {
+async function checkAdmin(request, env) {
   if (!env || !env.ADMIN_PASSWORD) {
     return json({ ok: false, error: '后台密码未配置：请在 EdgeOne Pages 项目设置环境变量 ADMIN_PASSWORD', code: 'NO_PASSWORD' }, 401);
   }
   const key = request.headers.get('X-Admin-Key') || '';
   if (key !== env.ADMIN_PASSWORD) {
+    try { await logAudit(request, 'login.fail', '', '密码错误，拒绝访问'); } catch (e) {}
     return json({ ok: false, error: '密码错误', code: 'UNAUTHORIZED' }, 401);
   }
   return null;
+}
+
+// ===== 操作日志（KV 版：audits key，滚动保留 500 条） =====
+async function logAudit(request, action, target, detail, actorOverride) {
+  try {
+    const audits = await load('audits');
+    const operator = request.headers.get('X-Operator') || '';
+    const key = request.headers.get('X-Admin-Key') || '';
+    const tail = key ? key.slice(-4) : '';
+    const actor = actorOverride || operator || (tail ? `未署名(${tail})` : '未知');
+    audits.unshift({ at: new Date().toISOString(), actor, ip: '', action, target: target || '', detail: detail || '' });
+    await save('audits', audits.slice(0, 500));
+  } catch (e) { /* 日志失败不影响主流程 */ }
+}
+
+async function getAudit() {
+  return json({ ok: true, data: (await load('audits')).slice(0, 200) });
 }
 
 /* ---------- KV 读写 ---------- */
@@ -82,6 +100,7 @@ const DEFAULTS = {
   wanted: [],
   seq: { order: 1, wanted: 1, item: 1 },
   backups: [],
+  audits: [],
 };
 
 async function load(key) {
@@ -104,35 +123,66 @@ export async function onRequest({ request, env }) {
 
   try {
     if (!isPublicPath(p, method)) {
-      const denied = checkAdmin(request, env);
+      const denied = await checkAdmin(request, env);
       if (denied) return denied;
     }
 
     // ===== 订单集合 =====
     if (p === '/api/orders') {
       if (method === 'GET') return await getOrders(url);
-      if (method === 'POST') return await createOrder(await readBody(request));
+      if (method === 'POST') {
+        const body = await readBody(request);
+        const place = normMethod(body) === 'self_pickup' ? `自提·${String(body.pickup_location || '').trim() || '默认'}` : `${body.delivery_building} ${body.sub_zone}`;
+        await logAudit(request, 'order.create', '', `${place}，${(body.items || []).length} 本书`, '顾客');
+        return await createOrder(body);
+      }
     }
 
     // ===== 统计 / 书名联想 / 清空已完成 =====
     if (p === '/api/stats' && method === 'GET') return await getStats(url);
     if (p === '/api/book-names' && method === 'GET') return await getBookNames();
     if (p === '/api/book-stock' && method === 'GET') return await getBookStock();
-    if (p === '/api/clear-done' && method === 'POST') return await clearDone();
+    if (p === '/api/clear-done' && method === 'POST') {
+      await logAudit(request, 'order.clearDone', '', '已完成/已取消订单移入回收站');
+      return await clearDone();
+    }
 
     // ===== 回收站（软删订单/求书：列表/还原/彻底删/清空） =====
     if (p === '/api/recycle' && method === 'GET') return await getRecycle();
-    if (p === '/api/recycle/restore' && method === 'POST') return await recycleRestore(await readBody(request));
-    if (p === '/api/recycle/item' && method === 'DELETE') return await recyclePurgeItem(await readBody(request));
-    if (p === '/api/recycle/empty' && method === 'POST') return await recycleEmpty();
+    if (p === '/api/recycle/restore' && method === 'POST') {
+      const body = await readBody(request);
+      await logAudit(request, 'recycle.restore', `${body && body.type === 'order' ? '订单' : '求书'}#${body && body.id}`, '从回收站还原');
+      return await recycleRestore(body);
+    }
+    if (p === '/api/recycle/item' && method === 'DELETE') {
+      const body = await readBody(request);
+      await logAudit(request, 'recycle.purge', `${body && body.type === 'order' ? '订单' : '求书'}#${body && body.id}`, '彻底删除');
+      return await recyclePurgeItem(body);
+    }
+    if (p === '/api/recycle/empty' && method === 'POST') {
+      await logAudit(request, 'recycle.empty', '', '清空回收站');
+      return await recycleEmpty();
+    }
 
     // ===== 库存 =====
     if (p === '/api/inventory') {
       if (method === 'GET') return await getInventory();
-      if (method === 'POST') return await importInventory(await readBody(request));
-      if (method === 'DELETE') return await clearInventory();
+      if (method === 'POST') {
+        const body = await readBody(request);
+        const items = (body && body.items) || body || [];
+        await logAudit(request, 'inventory.set', items.length > 1 ? `${items.length} 本书` : (items[0] && items[0].book_name) || '', items.map((i) => `${i.book_name}=${i.stock}`).join('、').slice(0, 200));
+        return await importInventory(body);
+      }
+      if (method === 'DELETE') {
+        await logAudit(request, 'inventory.clear', '', '清空库存');
+        return await clearInventory();
+      }
     }
-    if (p === '/api/inventory/item' && method === 'DELETE') return await deleteInventoryItem(await readBody(request));
+    if (p === '/api/inventory/item' && method === 'DELETE') {
+      const body = await readBody(request);
+      await logAudit(request, 'inventory.delete', (body && body.book_name) || '', '删除库存记录');
+      return await deleteInventoryItem(body);
+    }
 
     // ===== 顾客按联系方式查单 =====
     if (p === '/api/my-orders' && method === 'GET') return await getMyOrders(url);
@@ -140,45 +190,90 @@ export async function onRequest({ request, env }) {
     // ===== 求书登记 =====
     if (p === '/api/wanted') {
       if (method === 'GET') return await getWanted(url);
-      if (method === 'POST') return await createWanted(await readBody(request));
+      if (method === 'POST') {
+        const body = await readBody(request);
+        await logAudit(request, 'wanted.create', String((body && body.book_name) || '').trim(), `×${Number(body && body.quantity) || ''}`);
+        return await createWanted(body);
+      }
     }
-    if (p === '/api/wanted/public' && method === 'POST') return await createWantedPublic(await readBody(request));
+    if (p === '/api/wanted/public' && method === 'POST') {
+      const body = await readBody(request);
+      await logAudit(request, 'wanted.create', String((body && body.book_name) || '').trim(), `×${Number(body && body.quantity) || ''}`, '顾客');
+      return await createWantedPublic(body);
+    }
 
     // ===== 订单状态更新 =====
     let m = p.match(/^\/api\/orders\/(\d+)\/status$/);
-    if (m && method === 'PATCH') return await updateStatus(Number(m[1]), await readBody(request));
+    if (m && method === 'PATCH') {
+      const body = await readBody(request);
+      await logAudit(request, 'order.status', `#${m[1]}`, `状态 → ${body && body.status}`);
+      return await updateStatus(Number(m[1]), body);
+    }
 
     // ===== 顾客自助取消（公开） =====
     m = p.match(/^\/api\/orders\/(\d+)\/cancel$/);
-    if (m && method === 'POST') return await cancelOrderPublic(Number(m[1]), await readBody(request));
+    if (m && method === 'POST') {
+      const body = await readBody(request);
+      await logAudit(request, 'order.cancel', `#${m[1]}`, '顾客自助取消', '顾客');
+      return await cancelOrderPublic(Number(m[1]), body);
+    }
 
     // ===== 单个订单 =====
     m = p.match(/^\/api\/orders\/(\d+)$/);
     if (m) {
       const id = Number(m[1]);
       if (method === 'GET') return await getOrder(id);
-      if (method === 'PUT') return await updateOrder(id, await readBody(request));
-      if (method === 'DELETE') return await delOrder(id);
+      if (method === 'PUT') {
+        const body = await readBody(request);
+        const place = normMethod(body) === 'self_pickup' ? `自提·${String(body.pickup_location || '').trim() || '默认'}` : `${body.delivery_building} ${body.sub_zone}`;
+        await logAudit(request, 'order.update', `#${id}`, `改为 ${place}，${(body.items || []).length} 本书`);
+        return await updateOrder(id, body);
+      }
+      if (method === 'DELETE') {
+        await logAudit(request, 'order.delete', `#${id}`, '移入回收站');
+        return await delOrder(id);
+      }
     }
 
     // ===== 求书状态 / 单条 =====
     m = p.match(/^\/api\/wanted\/(\d+)\/status$/);
-    if (m && method === 'PATCH') return await updateWantedStatus(Number(m[1]), await readBody(request));
+    if (m && method === 'PATCH') {
+      const body = await readBody(request);
+      await logAudit(request, 'wanted.status', `#${m[1]}`, `状态 → ${body && body.status}`);
+      return await updateWantedStatus(Number(m[1]), body);
+    }
 
     m = p.match(/^\/api\/wanted\/(\d+)$/);
     if (m) {
       const id = Number(m[1]);
-      if (method === 'PUT') return await updateWanted(id, await readBody(request));
-      if (method === 'DELETE') return await delWanted(id);
+      if (method === 'PUT') {
+        const body = await readBody(request);
+        await logAudit(request, 'wanted.update', `#${id}`, `${String((body && body.book_name) || '').trim()} ×${Number(body && body.quantity) || ''}`);
+        return await updateWanted(id, body);
+      }
+      if (method === 'DELETE') {
+        await logAudit(request, 'wanted.delete', `#${id}`, '移入回收站');
+        return await delWanted(id);
+      }
     }
 
     // ===== 备份（列表/下载/恢复/手动立即备份） =====
     if (p === '/api/backups' && method === 'GET') return await listBackups();
-    if (p === '/api/backups/now' && method === 'POST') return json({ ok: true, data: await doBackup() });
+    if (p === '/api/backups/now' && method === 'POST') {
+      const r = await doBackup();
+      await logAudit(request, 'backup.create', r.day, `手动备份 ${Math.round(r.bytes / 1024)} KB`);
+      return json({ ok: true, data: r });
+    }
     let bm = p.match(/^\/api\/backups\/(\d{4}-\d{2}-\d{2})\/restore$/);
-    if (bm && method === 'POST') return await restoreBackup(bm[1]);
+    if (bm && method === 'POST') {
+      await logAudit(request, 'backup.restore', bm[1], '恢复备份');
+      return await restoreBackup(bm[1]);
+    }
     bm = p.match(/^\/api\/backups\/(\d{4}-\d{2}-\d{2})$/);
     if (bm && method === 'GET') return await getBackup(bm[1]);
+
+    // ===== 操作日志查询 =====
+    if (p === '/api/audit' && method === 'GET') return await getAudit();
 
     // ===== 一次性数据迁移（从 Cloudflare 版导入旧数据；管理员接口） =====
     if (p === '/api/migrate' && method === 'POST') return await migrateData(await readBody(request));
