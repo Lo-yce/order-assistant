@@ -1204,6 +1204,72 @@ window.App.recycleEmpty = function () {
   });
 };
 
+/* ---------- 备份管理（每日自动备份，保留 7 天，可下载/恢复） ---------- */
+window.App.toggleBackups = async function () {
+  const box = $("#backupBox");
+  const show = box.style.display === "none";
+  box.style.display = show ? "" : "none";
+  if (show) await renderBackups();
+};
+
+async function renderBackups() {
+  const box = $("#backupBox");
+  box.innerHTML = '<div class="empty">加载中…</div>';
+  try {
+    const list = await api("/api/backups");
+    const fmtSize = (n) => (n > 1024 * 1024 ? (n / 1024 / 1024).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB");
+    let html = '<h2 style="margin:6px 0 12px;font-size:17px">每日备份 <span style="font-size:12px;font-weight:400;color:var(--muted)">每天自动一次，保留近 7 天</span></h2>';
+    if (!list.length) {
+      html += '<div class="card"><div class="empty">暂无备份，打开一次订单列表后自动生成今日备份</div></div>';
+    } else {
+      html += '<div class="card">' + list.map((b) => `
+        <div class="recycle-item">
+          <div><b>${b.day}</b> <span class="sub" style="display:inline">· ${fmtSize(b.bytes)} · ${b.created_at.slice(11, 16)} UTC 生成</span></div>
+          <div class="btns" style="margin-top:6px">
+            <button class="btn ghost sm" onclick="App.downloadBackup('${b.day}')"><i class="bi bi-download"></i> 下载</button>
+            <button class="btn ghost sm" style="background:#fdeaea;color:var(--danger)" onclick="App.restoreBackup('${b.day}')"><i class="bi bi-arrow-counterclockwise"></i> 恢复到此备份</button>
+          </div>
+        </div>`).join("") + "</div>";
+    }
+    html += '<div class="sub" style="color:var(--muted);font-size:12px;padding:0 4px">恢复会用所选备份覆盖当前全部数据（订单/库存/求书），谨慎操作。</div>';
+    box.innerHTML = html;
+  } catch (e) { box.innerHTML = '<div class="empty">加载失败：' + esc(e.message) + "</div>"; }
+}
+
+// 下载备份 JSON（fetch 带 admin key → blob 保存）
+window.App.downloadBackup = async function (day) {
+  try {
+    const headers = { "Content-Type": "application/json" };
+    const pwd = getPwd();
+    if (pwd) headers["X-Admin-Key"] = pwd;
+    const res = await fetch(`${WORKER_BASE}/api/backups/${day}`, { headers });
+    if (!res.ok) throw new Error("下载失败 " + res.status);
+    const blob = await res.blob();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `backup-${day}.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    toast(`已下载 ${day} 备份`);
+  } catch (e) { toast(e.message || "下载失败"); }
+};
+
+// 恢复备份（双重确认：输入框确认 + confirmModal）
+window.App.restoreBackup = function (day) {
+  confirmModal(
+    "恢复备份：" + day,
+    `将用 ${day} 的备份覆盖当前全部数据（订单、库存、求书），之后的修改将丢失。\n\n确定要恢复吗？`,
+    async () => {
+      try {
+        const res = await api(`/api/backups/${day}/restore`, "POST");
+        toast(`已恢复 ${res.day} 备份（订单 ${res.orders} / 库存 ${res.inventory} / 求书 ${res.wanted}）`);
+        await Promise.all([loadOrders(), loadStats()]);
+        render();
+      } catch (e) { toast(e.message); }
+    }
+  );
+};
+
 /* ---------- 分享下单链接 ---------- */
 window.App.shareLink = async function () {
   const url = new URL("order-entry.html", location.href).href;

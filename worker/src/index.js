@@ -65,6 +65,15 @@ function checkAdmin(request, env) {
 
 export default {
   async fetch(request, env) {
+    return await handleRequest(request, env);
+  },
+  // Cloudflare Cron：每天 UTC 18:00（北京时间 2:00）自动备份
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(doBackup(env.DB).catch(() => {}));
+  },
+};
+
+async function handleRequest(request, env) {
     const url = new URL(request.url);
     const db = env.DB;
     const p = url.pathname;
@@ -102,6 +111,14 @@ export default {
       if (p === '/api/recycle/restore' && method === 'POST') return await recycleRestore(db, await readBody(request));
       if (p === '/api/recycle/item' && method === 'DELETE') return await recyclePurgeItem(db, await readBody(request));
       if (p === '/api/recycle/empty' && method === 'POST') return await recycleEmpty(db);
+
+      // 备份（列表/下载/恢复/手动立即备份）
+      if (p === '/api/backups' && method === 'GET') return await listBackups(db);
+      if (p === '/api/backups/now' && method === 'POST') return json({ ok: true, data: await doBackup(db) });
+      let bm = p.match(/^\/api\/backups\/(\d{4}-\d{2}-\d{2})\/restore$/);
+      if (bm && method === 'POST') return await restoreBackup(db, bm[1]);
+      bm = p.match(/^\/api\/backups\/(\d{4}-\d{2}-\d{2})$/);
+      if (bm && method === 'GET') return await getBackup(db, bm[1]);
 
       // 库存
       if (p === '/api/inventory' && method === 'GET') return await getInventory(db);
@@ -176,11 +193,12 @@ export default {
     } catch (e) {
       return json({ ok: false, error: 'Server Error: ' + e.message }, 500);
     }
-  },
-};
+}
 
 async function getOrders(db, url) {
   const status = url.searchParams.get('status');
+  // 每日惰性备份：当天还没有备份时顺手做一次（cron 失效的兜底）
+  try { await ensureTodayBackup(db); } catch (e) {}
   // 排序（配送路线友好）：进行中在前；待配送>配送中；同苑聚合+楼号自然序；尽快优先；自提最后；软删不显示
   const where = status ? 'WHERE deleted_at IS NULL AND status = ?' : 'WHERE deleted_at IS NULL';
   const binds = status ? [status] : [];
@@ -557,6 +575,91 @@ async function recycleEmpty(db) {
   const o = await db.prepare('DELETE FROM orders WHERE deleted_at IS NOT NULL').run();
   const w = await db.prepare('DELETE FROM wanted_books WHERE deleted_at IS NOT NULL').run();
   return json({ ok: true, data: { deleted: (o.meta.changes || 0) + (w.meta.changes || 0) } });
+}
+
+// ===== 每日自动备份（保留近 7 天，可下载/恢复） =====
+async function doBackup(db) {
+  // 幂等建表（备份表不在 schema 里，避免旧库报错）
+  await db.prepare('CREATE TABLE IF NOT EXISTS backups (day TEXT PRIMARY KEY, payload TEXT NOT NULL, created_at TEXT NOT NULL)').run();
+  const day = new Date().toISOString().slice(0, 10);
+  const { results: orders } = await db.prepare('SELECT * FROM orders').all();
+  const { results: order_items } = await db.prepare('SELECT * FROM order_items').all();
+  const { results: inventory } = await db.prepare('SELECT * FROM inventory').all();
+  const { results: wanted_books } = await db.prepare('SELECT * FROM wanted_books').all();
+  const payload = JSON.stringify({ version: 1, day, orders, order_items, inventory, wanted_books });
+  await db.prepare(
+    'INSERT INTO backups (day, payload, created_at) VALUES (?,?,?) ON CONFLICT(day) DO UPDATE SET payload=excluded.payload, created_at=excluded.created_at'
+  ).bind(day, payload, new Date().toISOString()).run();
+  // 只保留最近 7 天
+  await db.prepare('DELETE FROM backups WHERE day NOT IN (SELECT day FROM backups ORDER BY day DESC LIMIT 7)').run();
+  return { day, bytes: payload.length };
+}
+
+// 惰性备份：当天没有备份时补一次
+async function ensureTodayBackup(db) {
+  const day = new Date().toISOString().slice(0, 10);
+  const row = await db.prepare('SELECT day FROM backups WHERE day = ?').bind(day).first();
+  if (!row) await doBackup(db);
+}
+
+// 备份列表（摘要）
+async function listBackups(db) {
+  const { results } = await db.prepare('SELECT day, created_at, LENGTH(payload) AS bytes FROM backups ORDER BY day DESC').all();
+  return json({ ok: true, data: results });
+}
+
+// 下载某天备份 JSON
+async function getBackup(db, day) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return json({ ok: false, error: '日期格式无效' }, 400);
+  const row = await db.prepare('SELECT payload FROM backups WHERE day = ?').bind(day).first();
+  if (!row) return json({ ok: false, error: '备份不存在' }, 404);
+  return new Response(row.payload, {
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Content-Disposition': `attachment; filename="backup-${day}.json"`,
+      ...corsHeaders(),
+    },
+  });
+}
+
+// 从某天备份恢复（覆盖当前全部数据，原子执行）
+async function restoreBackup(db, day) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return json({ ok: false, error: '日期格式无效' }, 400);
+  const row = await db.prepare('SELECT payload FROM backups WHERE day = ?').bind(day).first();
+  if (!row) return json({ ok: false, error: '备份不存在' }, 404);
+  let data;
+  try { data = JSON.parse(row.payload); } catch (e) { return json({ ok: false, error: '备份文件损坏' }, 500); }
+  const orders = Array.isArray(data.orders) ? data.orders : [];
+  const items = Array.isArray(data.order_items) ? data.order_items : [];
+  const inv = Array.isArray(data.inventory) ? data.inventory : [];
+  const wanted = Array.isArray(data.wanted_books) ? data.wanted_books : [];
+
+  const stmts = [];
+  stmts.push(db.prepare('DELETE FROM order_items'));
+  stmts.push(db.prepare('DELETE FROM orders'));
+  stmts.push(db.prepare('DELETE FROM inventory'));
+  stmts.push(db.prepare('DELETE FROM wanted_books'));
+  for (const o of orders) {
+    stmts.push(db.prepare(
+      'INSERT INTO orders (id, delivery_method, delivery_building, sub_zone, pickup_location, deliver_time, contact, remark, status, created_at, updated_at, deleted_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)'
+    ).bind(o.id, o.delivery_method || 'delivery', o.delivery_building || '', o.sub_zone || '', o.pickup_location || '', o.deliver_time || null, o.contact || '', o.remark || '', o.status || 'pending', o.created_at, o.updated_at || o.created_at, o.deleted_at || null));
+  }
+  for (const it of items) {
+    stmts.push(db.prepare('INSERT INTO order_items (id, order_id, book_name, quantity) VALUES (?,?,?,?)')
+      .bind(it.id, it.order_id, it.book_name, it.quantity));
+  }
+  for (const v of inv) {
+    stmts.push(db.prepare('INSERT INTO inventory (book_name, stock, updated_at) VALUES (?,?,?)')
+      .bind(v.book_name, v.stock, v.updated_at || new Date().toISOString()));
+  }
+  for (const w of wanted) {
+    stmts.push(db.prepare(
+      'INSERT INTO wanted_books (id, book_name, quantity, contact, remark, status, created_at, updated_at, deleted_at) VALUES (?,?,?,?,?,?,?,?,?)'
+    ).bind(w.id, w.book_name, w.quantity, w.contact || '', w.remark || '', w.status || 'open', w.created_at, w.updated_at || w.created_at, w.deleted_at || null));
+  }
+  // 单次 batch = 单事务：任一失败全部回滚，不会出现清空后没插回的中间态
+  await db.batch(stmts);
+  return json({ ok: true, data: { day, orders: orders.length, items: items.length, inventory: inv.length, wanted: wanted.length } });
 }
 
 // 顾客自助登记求书：必须留联系方式，数量限制 1~99 防滥用

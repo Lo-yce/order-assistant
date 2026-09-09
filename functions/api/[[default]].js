@@ -81,6 +81,7 @@ const DEFAULTS = {
   inventory: [],
   wanted: [],
   seq: { order: 1, wanted: 1, item: 1 },
+  backups: [],
 };
 
 async function load(key) {
@@ -171,6 +172,14 @@ export async function onRequest({ request, env }) {
       if (method === 'DELETE') return await delWanted(id);
     }
 
+    // ===== 备份（列表/下载/恢复/手动立即备份） =====
+    if (p === '/api/backups' && method === 'GET') return await listBackups();
+    if (p === '/api/backups/now' && method === 'POST') return json({ ok: true, data: await doBackup() });
+    let bm = p.match(/^\/api\/backups\/(\d{4}-\d{2}-\d{2})\/restore$/);
+    if (bm && method === 'POST') return await restoreBackup(bm[1]);
+    bm = p.match(/^\/api\/backups\/(\d{4}-\d{2}-\d{2})$/);
+    if (bm && method === 'GET') return await getBackup(bm[1]);
+
     // ===== 一次性数据迁移（从 Cloudflare 版导入旧数据；管理员接口） =====
     if (p === '/api/migrate' && method === 'POST') return await migrateData(await readBody(request));
 
@@ -219,6 +228,8 @@ function sortOrders(list) {
 
 async function getOrders(url) {
   const status = url.searchParams.get('status');
+  // 每日惰性备份：当天还没有备份时顺手做一次（cron 失效的兜底）
+  try { await ensureTodayBackup(); } catch (e) {}
   let list = await load('orders');
   list = list.filter((o) => !o.deleted_at); // 软删不显示
   if (status) list = list.filter((o) => o.status === status);
@@ -638,6 +649,76 @@ async function recycleEmpty() {
   await save('orders', keepO);
   await save('wanted', keepW);
   return json({ ok: true, data: { deleted: orders.length - keepO.length + wanted.length - keepW.length } });
+}
+
+/* ---------- 每日自动备份（保留近 7 天，可下载/恢复） ---------- */
+async function doBackup() {
+  const day = new Date().toISOString().slice(0, 10);
+  const orders = await load('orders');
+  const inventory = await load('inventory');
+  const wanted = await load('wanted');
+  const payload = JSON.stringify({ version: 1, day, orders, inventory, wanted });
+  const backups = await load('backups');
+  const idx = backups.findIndex((b) => b.day === day);
+  const entry = { day, payload, created_at: new Date().toISOString() };
+  if (idx >= 0) backups[idx] = entry; else backups.unshift(entry);
+  await save('backups', backups.slice(0, 7)); // 只保留最近 7 天
+  return { day, bytes: payload.length };
+}
+
+// 惰性备份：当天没有备份时补一次
+async function ensureTodayBackup() {
+  const day = new Date().toISOString().slice(0, 10);
+  const backups = await load('backups');
+  if (!backups.some((b) => b.day === day)) await doBackup();
+}
+
+async function listBackups() {
+  const backups = await load('backups');
+  return json({ ok: true, data: backups.map((b) => ({ day: b.day, created_at: b.created_at, bytes: b.payload.length })) });
+}
+
+function findBackup(backups, day) {
+  return backups.find((b) => b.day === day);
+}
+
+async function getBackup(day) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return json({ ok: false, error: '日期格式无效' }, 400);
+  const b = findBackup(await load('backups'), day);
+  if (!b) return json({ ok: false, error: '备份不存在' }, 404);
+  return new Response(b.payload, {
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Content-Disposition': `attachment; filename="backup-${day}.json"`,
+      ...corsHeaders(),
+    },
+  });
+}
+
+// 从某天备份恢复（覆盖当前全部数据）
+async function restoreBackup(day) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return json({ ok: false, error: '日期格式无效' }, 400);
+  const b = findBackup(await load('backups'), day);
+  if (!b) return json({ ok: false, error: '备份不存在' }, 404);
+  let data;
+  try { data = JSON.parse(b.payload); } catch (e) { return json({ ok: false, error: '备份文件损坏' }, 500); }
+  const orders = Array.isArray(data.orders) ? data.orders : [];
+  const inventory = Array.isArray(data.inventory) ? data.inventory : [];
+  const wanted = Array.isArray(data.wanted) ? data.wanted : [];
+
+  await save('orders', orders);
+  await save('inventory', inventory);
+  await save('wanted', wanted);
+
+  // 重算自增序号（避免恢复后新记录 id 冲突）
+  const seq = { order: 1, wanted: 1, item: 1 };
+  for (const o of orders) {
+    if (o.id >= seq.order) seq.order = o.id + 1;
+    for (const it of o.items || []) if (it.id >= seq.item) seq.item = it.id + 1;
+  }
+  for (const w of wanted) if (w.id >= seq.wanted) seq.wanted = w.id + 1;
+  await save('seq', seq);
+  return json({ ok: true, data: { day, orders: orders.length, inventory: inventory.length, wanted: wanted.length } });
 }
 
 /* ---------- 一次性迁移：整体导入旧数据（会覆盖现有 KV 数据） ---------- */
