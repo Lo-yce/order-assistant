@@ -51,6 +51,7 @@ function isPublicPath(p, method) {
     (p === '/api/orders' && method === 'POST') ||
     (p === '/api/book-names' && method === 'GET') ||
     (p === '/api/book-stock' && method === 'GET') ||
+    (p === '/api/time-load' && method === 'GET') ||
     (/^\/api\/orders\/\d+\/cancel$/.test(p) && method === 'POST') ||
     (p === '/api/my-orders' && method === 'GET') ||
     (p === '/api/wanted/public' && method === 'POST')
@@ -186,6 +187,19 @@ export async function onRequest({ request, env }) {
       const wanted = await load('wanted');
       const maxUp = orders.reduce((m, o) => (o.updated_at > m ? o.updated_at : m), '');
       return json({ ok: true, data: { v: `o${orders.length}-${maxUp}-w${wanted.length}` } });
+    }
+
+    // ===== 时段负载（顾客选时间时提示扎堆；只返回数量不暴露订单） =====
+    if (p === '/api/time-load' && method === 'GET') {
+      const d = new Date(url.searchParams.get('time') || '');
+      if (isNaN(d)) return json({ ok: false, error: '时间参数无效' }, 400);
+      const from = new Date(d.getTime() - 30 * 60 * 1000).toISOString();
+      const to = new Date(d.getTime() + 30 * 60 * 1000).toISOString();
+      const count = (await load('orders')).filter((o) =>
+        !o.deleted_at && (o.status === 'pending' || o.status === 'delivering') &&
+        o.deliver_time && o.deliver_time >= from && o.deliver_time <= to
+      ).length;
+      return json({ ok: true, data: { count } });
     }
 
     // ===== 回收站（软删订单/求书：列表/还原/彻底删/清空） =====

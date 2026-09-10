@@ -79,7 +79,8 @@
           <button type="button" class="chip" onclick="setQuickTime(12, 0, 1)">明天中午 12 点</button>
           <button type="button" class="chip" onclick="setQuickTime(20, 0, 1)">明天晚上 8 点</button>
         </div>
-        <input class="input time" id="eTime" type="datetime-local" />
+        <input class="input time" id="eTime" type="datetime-local" oninput="onTimeChange()" onchange="onTimeChange()" />
+        <div id="timeLoadTip" style="display:none;font-size:13px;line-height:1.5;margin-top:8px;background:#fdf3e2;border:1px solid rgba(232,161,61,.35);border-radius:10px;padding:8px 10px;color:#9c6b1f"></div>
       </div>
       <div class="field">
         <label>联系方式（手机号 / QQ / 微信）<span class="req">*</span></label>
@@ -179,6 +180,29 @@
       }
       const p = (n) => String(n).padStart(2, "0");
       $("#eTime").value = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(h)}:${p(min)}`;
+      onTimeChange();
+    };
+
+    // 时段负载提示：所选时间 ±30 分钟内在途订单 ≥3 单时提醒错峰
+    let _timeLoadTimer = null;
+    window.onTimeChange = function(){
+      clearTimeout(_timeLoadTimer);
+      const tip = $("#timeLoadTip");
+      tip.style.display = "none";
+      const v = $("#eTime").value;
+      if (!v) return;
+      const d = new Date(v);
+      if (isNaN(d)) return;
+      _timeLoadTimer = setTimeout(async () => {
+        try {
+          const resp = await fetch(WORKER_BASE + "/api/time-load?time=" + encodeURIComponent(d.toISOString()));
+          const rj = await resp.json().catch(() => ({}));
+          if (rj.ok && rj.data.count >= 3) {
+            tip.textContent = `⏰ 该时段前后已有 ${rj.data.count} 单配送，可能稍有延迟，介意的话可选其他时间或选「尽快配送」`;
+            tip.style.display = "block";
+          }
+        } catch (e) {}
+      }, 400);
     };
 
     // 大苑 → 楼号联动

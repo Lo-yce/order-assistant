@@ -45,6 +45,7 @@ function isPublicPath(p, method) {
     (p === '/api/orders' && method === 'POST') ||
     (p === '/api/book-names' && method === 'GET') ||
     (p === '/api/book-stock' && method === 'GET') ||
+    (p === '/api/time-load' && method === 'GET') ||
     (/^\/api\/orders\/\d+\/cancel$/.test(p) && method === 'POST') ||
     (p === '/api/my-orders' && method === 'GET') ||
     (p === '/api/wanted/public' && method === 'POST')
@@ -129,6 +130,9 @@ async function handleRequest(request, env) {
 
       // 数据版本（轮询增量探测用：轻量，变了才拉全量）
       if (p === '/api/version' && method === 'GET') return await getDataVersion(db);
+
+      // 时段负载（顾客选时间时提示扎堆；只返回数量不暴露订单）
+      if (p === '/api/time-load' && method === 'GET') return await getTimeLoad(db, url);
 
       // 回收站（软删订单/求书：列表/还原/彻底删/清空）
       if (p === '/api/recycle' && method === 'GET') return await getRecycle(db);
@@ -350,6 +354,19 @@ async function getDataVersion(db) {
   const o = await db.prepare('SELECT COUNT(*) AS c, MAX(updated_at) AS m FROM orders').first();
   const w = await db.prepare('SELECT COUNT(*) AS c FROM wanted_books').first();
   return json({ ok: true, data: { v: `o${o.c}-${o.m || ''}-w${w.c}` } });
+}
+
+// 时段负载：所选时间 ±30 分钟内的在途（待配送/配送中）订单数；只返回数量不暴露订单细节
+async function getTimeLoad(db, url) {
+  const t = url.searchParams.get('time') || '';
+  const d = new Date(t);
+  if (!t || isNaN(d)) return json({ ok: false, error: '时间参数无效' }, 400);
+  const from = new Date(d.getTime() - 30 * 60 * 1000).toISOString();
+  const to = new Date(d.getTime() + 30 * 60 * 1000).toISOString();
+  const row = await db.prepare(
+    "SELECT COUNT(*) AS c FROM orders WHERE deleted_at IS NULL AND status IN ('pending','delivering') AND deliver_time IS NOT NULL AND deliver_time >= ? AND deliver_time <= ?"
+  ).bind(from, to).first();
+  return json({ ok: true, data: { count: row.c } });
 }
 
 // 统计：需求合计 + 库存 + 剩余；可选 ?building= 按苑筛选；已取消订单不计需求
