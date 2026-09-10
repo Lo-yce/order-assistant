@@ -335,6 +335,10 @@ input, select, textarea { font: inherit; }
 .audit-item .audit-target { color: var(--text); }
 .audit-item .audit-detail { color: var(--muted); font-size: 12px; margin-top: 2px; word-break: break-all; }
 
+/* 书名管理条目 */
+.bookmgmt-item { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px dashed #eef1f4; }
+.bookmgmt-item:last-child { border-bottom: none; }
+
 /* 已取消：楼号/书名删除线 + 左条变灰 */
 .order-card.cancelled .zone, .order-card.cancelled .bk { text-decoration: line-through; color: var(--muted); }
 .order-card.cancelled::before { background: #c3cbd2; }

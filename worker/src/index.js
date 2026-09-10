@@ -217,6 +217,9 @@ async function handleRequest(request, env) {
       // 操作日志查询
       if (p === '/api/audit' && method === 'GET') return await getAudit(db);
 
+      // 书名管理：改名/合并（订单需求并入新书名，库存同步处理）
+      if (p === '/api/book-names/rename' && method === 'POST') return await renameBook(db, request, await readBody(request));
+
       return json({ ok: false, error: 'Not Found' }, 404);
     } catch (e) {
       return json({ ok: false, error: 'Server Error: ' + e.message }, 500);
@@ -470,6 +473,31 @@ async function getAudit(db) {
   await db.prepare("CREATE TABLE IF NOT EXISTS audit_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, actor TEXT NOT NULL, ip TEXT DEFAULT '', action TEXT NOT NULL, target TEXT DEFAULT '', detail TEXT DEFAULT '')").run();
   const { results } = await db.prepare('SELECT * FROM audit_logs ORDER BY id DESC LIMIT 200').all();
   return json({ ok: true, data: results });
+}
+
+// 书名改名/合并：from 的订单需求全部并入 to；库存若 to 已存在则删 from（保留 to 的库存），否则改名为 to
+async function renameBook(db, request, body) {
+  const from = String((body && body.from) || '').trim();
+  const to = String((body && body.to) || '').trim();
+  if (!from || !to) return json({ ok: false, error: '请填写原书名和新书名' }, 400);
+  if (from === to) return json({ ok: false, error: '新书名不能与原书名相同' }, 400);
+
+  const ordersChanged = await db.prepare('UPDATE order_items SET book_name = ? WHERE book_name = ?').bind(to, from).run();
+  const now = new Date().toISOString();
+  const invFrom = await db.prepare('SELECT stock FROM inventory WHERE book_name = ?').bind(from).first();
+  let invNote = '无库存记录';
+  if (invFrom) {
+    const invTo = await db.prepare('SELECT stock FROM inventory WHERE book_name = ?').bind(to).first();
+    if (invTo) {
+      await db.prepare('DELETE FROM inventory WHERE book_name = ?').bind(from).run();
+      invNote = `目标已有库存 ${invTo.stock} 本，保留并删除旧库存 ${invFrom.stock} 本`;
+    } else {
+      await db.prepare('UPDATE inventory SET book_name = ?, updated_at = ? WHERE book_name = ?').bind(to, now, from).run();
+      invNote = `库存 ${invFrom.stock} 本已随改名`;
+    }
+  }
+  await logAudit(db, request, 'book.rename', from, `改名为「${to}」；并入 ${ordersChanged.meta.changes || 0} 条订单书单；${invNote}`);
+  return json({ ok: true, data: { from, to, orders: ordersChanged.meta.changes || 0, invNote } });
 }
 
 // 顾客按联系方式查自己的订单（最多 20 条）

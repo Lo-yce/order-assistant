@@ -1306,6 +1306,7 @@ const AUDIT_NAMES = {
   'backup.create': '生成备份',
   'backup.restore': '恢复备份',
   'login.fail': '密码错误',
+  'book.rename': '改名/合并书名',
 };
 
 window.App.toggleAudit = async function () {
@@ -1352,6 +1353,70 @@ async function renderAudit() {
       </div>`;
   } catch (e) { box.innerHTML = '<div class="empty">加载失败：' + esc(e.message) + "</div>"; }
 }
+
+/* ---------- 书名管理（改名/合并） ---------- */
+window.App.toggleBookMgmt = function () {
+  const box = $("#bookMgmtBox");
+  const show = box.style.display === "none";
+  box.style.display = show ? "" : "none";
+  if (show) renderBookMgmt();
+};
+
+function renderBookMgmt() {
+  const box = $("#bookMgmtBox");
+  if (!state.stats.length) { box.innerHTML = '<div class="card"><div class="empty">暂无书名</div></div>'; return; }
+  box.innerHTML = `
+    <h2 style="margin:6px 0 12px;font-size:17px">书名管理 <span style="font-size:12px;font-weight:400;color:var(--muted)">书名写错/有多个版本时，可改名或合并到正确书名</span></h2>
+    <div class="card">
+      ${state.stats.map((s, idx) => {
+        const inv = s.stock != null ? ` · 库存 ${s.stock} · 剩余 ${s.remaining}` : "";
+        return `<div class="bookmgmt-item">
+          <div style="min-width:0;flex:1">
+            <div style="font-weight:600;word-break:break-all">${esc(s.book_name)}</div>
+            <div class="sub" style="font-size:12px;color:var(--muted)">需求 ${s.total_quantity} · ${s.order_count} 单${inv}</div>
+          </div>
+          <button class="btn ghost sm" style="flex:none" onclick="App.openRename(${idx})"><i class="bi bi-pencil"></i> 改名/合并</button>
+        </div>`;
+      }).join("")}
+    </div>`;
+}
+
+window.App.openRename = function (idx) {
+  const s = state.stats[idx];
+  if (!s) return;
+  window._renameFrom = s.book_name;
+  $("#renameFrom").textContent = `「${s.book_name}」`;
+  $("#renameTo").value = "";
+  $("#renameMask").classList.add("show");
+  setTimeout(() => { try { $("#renameTo").focus(); } catch (e) {} }, 60);
+};
+
+window.App.closeRename = function () {
+  $("#renameMask").classList.remove("show");
+  window._renameFrom = null;
+};
+
+window.App.submitRename = async function () {
+  const from = window._renameFrom;
+  const to = $("#renameTo").value.trim();
+  if (!from) return;
+  if (!to) { toast("请输入新书名"); return; }
+  const dup = state.stats.find((s) => s.book_name === to);
+  const doRename = async () => {
+    try {
+      const res = await api("/api/book-names/rename", "POST", { from, to });
+      App.closeRename();
+      toast(`「${from}」→「${to}」，并入 ${res.orders} 条书单${res.invNote ? "；" + res.invNote : ""}`);
+      await loadStats();
+      renderBookMgmt();
+    } catch (e) { toast(e.message); }
+  };
+  if (dup) {
+    confirmModal("合并书名", `「${to}」已存在（需求 ${dup.total_quantity}）。将把「${from}」的所有订单需求并入「${to}」${dup.stock != null ? "，库存保留「" + to + "」的 " + dup.stock + " 本" : ""}。确定合并？`, doRename);
+  } else {
+    await doRename();
+  }
+};
 
 /* ---------- 分享下单链接 ---------- */
 window.App.shareLink = async function () {

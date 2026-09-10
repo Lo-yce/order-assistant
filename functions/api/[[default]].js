@@ -87,6 +87,39 @@ async function getAudit() {
   return json({ ok: true, data: (await load('audits')).slice(0, 200) });
 }
 
+// 书名改名/合并：from 的订单需求全部并入 to；库存若 to 已存在则删 from（保留 to 的库存），否则改名为 to
+async function renameBook(body) {
+  const from = String((body && body.from) || '').trim();
+  const to = String((body && body.to) || '').trim();
+  if (!from || !to) return json({ ok: false, error: '请填写原书名和新书名' }, 400);
+  if (from === to) return json({ ok: false, error: '新书名不能与原书名相同' }, 400);
+
+  let ordersChanged = 0;
+  const orders = await load('orders');
+  for (const o of orders) {
+    for (const it of o.items || []) {
+      if (it.book_name === from) { it.book_name = to; ordersChanged++; }
+    }
+  }
+  await save('orders', orders);
+
+  let invNote = '无库存记录';
+  const inv = await load('inventory');
+  const idxFrom = inv.findIndex((v) => v.book_name === from);
+  if (idxFrom >= 0) {
+    if (inv.some((v) => v.book_name === to)) {
+      invNote = `目标已有库存 ${inv.find((v) => v.book_name === to).stock} 本，保留并删除旧库存 ${inv[idxFrom].stock} 本`;
+      inv.splice(idxFrom, 1);
+    } else {
+      invNote = `库存 ${inv[idxFrom].stock} 本已随改名`;
+      inv[idxFrom].book_name = to;
+      inv[idxFrom].updated_at = new Date().toISOString();
+    }
+    await save('inventory', inv);
+  }
+  return json({ ok: true, data: { from, to, orders: ordersChanged, invNote } });
+}
+
 /* ---------- KV 读写 ---------- */
 function kv() {
   const k = globalThis.OA_DB;
@@ -274,6 +307,15 @@ export async function onRequest({ request, env }) {
 
     // ===== 操作日志查询 =====
     if (p === '/api/audit' && method === 'GET') return await getAudit();
+
+    // ===== 书名管理：改名/合并 =====
+    if (p === '/api/book-names/rename' && method === 'POST') {
+      const body = await readBody(request);
+      const from = String((body && body.from) || '').trim();
+      const to = String((body && body.to) || '').trim();
+      await logAudit(request, 'book.rename', from, `改名为「${to}」`);
+      return await renameBook(body);
+    }
 
     // ===== 一次性数据迁移（从 Cloudflare 版导入旧数据；管理员接口） =====
     if (p === '/api/migrate' && method === 'POST') return await migrateData(await readBody(request));

@@ -1,11 +1,11 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>订单助手 · 后台</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" />
-  <link rel="stylesheet" href="css/style.css?v=20260910b" />
+  <link rel="stylesheet" href="css/style.css?v=20260910c" />
 </head>
 <body class="app">
   <header class="topbar">
@@ -47,10 +47,12 @@
       <div class="toolbar no-print" style="margin-top:2px">
         <button class="btn primary sm" onclick="App.addStockItem()"><i class="bi bi-plus-lg"></i> 添加书本</button>
         <button class="btn ghost sm" onclick="App.exportStatsCsv()"><i class="bi bi-file-earmark-spreadsheet"></i> 导出 CSV</button>
+        <button class="btn ghost sm" onclick="App.toggleBookMgmt()"><i class="bi bi-tags"></i> 书名管理</button>
         <button class="btn ghost sm" onclick="document.getElementById('invFile').click()"><i class="bi bi-upload"></i> 导入 Excel 库存</button>
         <button class="btn ghost sm" style="background:#fdeaea;color:var(--danger)" onclick="App.clearInventory()"><i class="bi bi-trash"></i> 清空库存</button>
         <input type="file" id="invFile" accept=".xlsx,.xls" style="display:none" onchange="App.importInventory(this)" />
       </div>
+      <div id="bookMgmtBox" style="display:none"></div>
       <div id="statsInner"></div>
     </section>
 
@@ -106,6 +108,23 @@
     .nav a.has-pending .nav-dot { display: block; }
     .nav a.has-open .nav-dot { display: block; }
   </style>
+
+  <!-- 书名改名/合并弹窗 -->
+  <div class="modal-mask" id="renameMask">
+    <div class="modal">
+      <h3>改名 / 合并书名</h3>
+      <p id="renameFrom" style="margin:8px 0 0;font-weight:700;color:var(--text);word-break:break-all"></p>
+      <div class="field" style="margin:10px 0 0">
+        <label>改为</label>
+        <input class="input" id="renameTo" placeholder="输入新书名（若已存在则合并）" />
+      </div>
+      <p style="margin-top:10px;margin-bottom:0" id="renameHint">该书名下所有订单需求会并入新书名；库存若新书名已有则保留新书名的，否则随改名。</p>
+      <div class="btns" style="margin-top:14px">
+        <button class="btn ghost" onclick="App.closeRename()">取消</button>
+        <button class="btn primary" onclick="App.submitRename()">确定</button>
+      </div>
+    </div>
+  </div>
 
   <div class="toast" id="toast"></div>
 
@@ -195,6 +214,6 @@
   <div id="printArea" style="display:none"></div>
 
   <script src="js/vendor/xlsx.full.min.js"></script>
-  <script src="js/app.js?v=20260910b"></script>
+  <script src="js/app.js?v=20260910c"></script>
 </body>
 </html>
