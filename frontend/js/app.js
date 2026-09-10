@@ -2,6 +2,9 @@
 /* API 地址：EdgeOne Pages 部署时前后端同域走相对路径；GitHub Pages 部署时走 Cloudflare Worker */
 const WORKER_BASE = location.hostname.endsWith("edgeone.app") ? "" : "https://order-assistant-worker.loyce.workers.dev";
 
+/* 根治挂载顺序问题：App 容器先初始化，之后任何位置 window.App.xxx = ... 都安全 */
+window.App = window.App || {};
+
 const BUILDINGS = {
   "大千苑18栋": ["18-1", "18-2", "18-3", "18-4"],
   "长江苑19栋": ["19-1", "19-2", "19-3", "19-4"],
@@ -693,7 +696,8 @@ function renderForm(order) {
   $("#formSaveBtn").onclick = submitForm;
 }
 
-window.App = {
+// 合并挂载（不覆盖前面已挂载的方法，根治挂载顺序问题）
+Object.assign(window.App, {
   syncZone(sel) {
     const zone = sel.closest(".card").querySelector(".zone");
     const zones = BUILDINGS[sel.value] || [];
@@ -755,7 +759,7 @@ window.App = {
     toast("已退出，正在刷新…");
     setTimeout(() => location.reload(), 800);
   },
-};
+});
 
 /* ---------- 提交表单 ---------- */
 async function submitForm() {
