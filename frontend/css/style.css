@@ -339,6 +339,25 @@ input, select, textarea { font: inherit; }
 .bookmgmt-item { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px dashed #eef1f4; }
 .bookmgmt-item:last-child { border-bottom: none; }
 
+/* 批量操作（多选模式） */
+.batch-check { flex: none; font-size: 22px; color: #c3cbd2; display: flex; align-items: center; cursor: pointer; }
+.batch-check.on { color: var(--pri); }
+.order-card.batch-checked { outline: 2px solid var(--pri); outline-offset: -2px; }
+.batch-bar {
+  position: fixed;
+  left: 12px; right: 12px;
+  bottom: calc(72px + env(safe-area-inset-bottom));
+  z-index: 60;
+  display: flex; align-items: center; gap: 8px;
+  background: #fff;
+  border-radius: 14px;
+  box-shadow: 0 6px 24px rgba(0,0,0,.16);
+  padding: 10px 12px;
+  max-width: 696px; margin: 0 auto;
+}
+.batch-bar .batch-count { flex: 1; text-align: center; font-size: 13px; color: var(--muted); }
+.batch-bar .batch-count b { color: var(--pri-dark); font-size: 15px; }
+
 /* 已取消：楼号/书名删除线 + 左条变灰 */
 .order-card.cancelled .zone, .order-card.cancelled .bk { text-decoration: line-through; color: var(--muted); }
 .order-card.cancelled::before { background: #c3cbd2; }

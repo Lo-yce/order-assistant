@@ -34,6 +34,8 @@ const state = {
   building: null, // 区域配送进入时的苑过滤
   sub: null,      // 楼号过滤
   statusFilter: "all",
+  batchMode: false, // 订单列表多选模式
+  batchSelected: [], // 多选已选订单 id
 };
 
 /* ---------- 工具 ---------- */
@@ -299,7 +301,8 @@ function renderOrders() {
     <button class="chip ${state.statusFilter === "delivering" ? "active" : ""}" onclick="App.setStatusFilter('delivering')">配送中</button>
     <button class="chip ${state.statusFilter === "done" ? "active" : ""}" onclick="App.setStatusFilter('done')">已完成</button>
     <button class="chip ${state.statusFilter === "cancelled" ? "active" : ""}" onclick="App.setStatusFilter('cancelled')">已取消</button>
-    <button class="chip ${state.statusFilter === "pickup" ? "active" : ""}" onclick="App.setStatusFilter('pickup')"><i class="bi bi-shop"></i> 自提</button>`;
+    <button class="chip ${state.statusFilter === "pickup" ? "active" : ""}" onclick="App.setStatusFilter('pickup')"><i class="bi bi-shop"></i> 自提</button>
+    <button class="chip ${state.batchMode ? "active" : ""}" style="${state.batchMode ? "background:var(--pri);color:#fff" : ""}" onclick="App.toggleBatchMode()"><i class="bi ${state.batchMode ? "bi-x-lg" : "bi-check2-square"}"></i> ${state.batchMode ? "退出多选" : "多选"}</button>`;
 
   let subChips = "";
   let building = state.building;
@@ -358,8 +361,76 @@ function renderOrders() {
   });
 
   $("#orderList").innerHTML = orders.length ? orders.map(orderCard).join("") : '<div class="empty">暂无订单</div>';
-  bindSwipeButtons();
+  if (!state.batchMode) bindSwipeButtons();
+  renderBatchBar(orders);
 }
+
+/* ===== 批量操作（多选模式）===== */
+function selectableOrders(orders) {
+  return orders.filter((o) => o.status === "pending" || o.status === "delivering");
+}
+
+function renderBatchBar(orders) {
+  const bar = $("#batchBar");
+  if (!state.batchMode) { bar.innerHTML = ""; return; }
+  const pool = selectableOrders(orders);
+  window._batchPool = pool; // 全选时复用当前筛选结果
+  const sel = state.batchSelected.filter((id) => pool.some((o) => o.id === id));
+  const hasPending = sel.some((id) => (orders.find((o) => o.id === id) || {}).status === "pending");
+  bar.innerHTML = `
+    <div class="batch-bar">
+      <button class="btn ghost sm" onclick="App.batchSelectAll()"><i class="bi bi-ui-checks"></i> ${sel.length === pool.length && pool.length ? "取消全选" : "全选可选"}</button>
+      <span class="batch-count">已选 <b>${sel.length}</b> / ${pool.length} 单</span>
+      <button class="btn warn sm" ${hasPending ? "" : "disabled"} onclick="App.batchStartDelivery()"><i class="bi bi-truck"></i> 批量配送</button>
+      <button class="btn danger sm" ${sel.length ? "" : "disabled"} onclick="App.batchDelete()"><i class="bi bi-trash3"></i> 批量删除</button>
+    </div>`;
+}
+
+window.App.toggleBatchMode = function () {
+  state.batchMode = !state.batchMode;
+  state.batchSelected = [];
+  render();
+};
+
+window.App.toggleBatchSelect = function (id) {
+  const i = state.batchSelected.indexOf(id);
+  if (i >= 0) state.batchSelected.splice(i, 1);
+  else state.batchSelected.push(id);
+  renderOrders();
+};
+
+window.App.batchSelectAll = function () {
+  const pool = window._batchPool || [];
+  const all = pool.length && pool.every((o) => state.batchSelected.includes(o.id));
+  state.batchSelected = all ? [] : pool.map((o) => o.id);
+  renderOrders();
+};
+
+window.App.batchStartDelivery = function () {
+  const ids = state.batchSelected.filter((id) => (state.orders.find((o) => o.id === id) || {}).status === "pending");
+  if (!ids.length) { toast("选中的订单里没有待配送的"); return; }
+  confirmModal("批量开始配送", `将把选中的 ${ids.length} 单设为「配送中」。确定继续？`, async () => {
+    const results = await Promise.allSettled(ids.map((id) => api(`/api/orders/${id}/status`, "PATCH", { status: "delivering" })));
+    const ok = results.filter((r) => r.status === "fulfilled").length;
+    toast(`已开始配送 ${ok} 单${ok < ids.length ? `，${ids.length - ok} 单失败` : ""}`);
+    state.batchSelected = [];
+    await loadOrders();
+    render();
+  });
+};
+
+window.App.batchDelete = function () {
+  const ids = [...state.batchSelected];
+  if (!ids.length) return;
+  confirmModal("批量删除", `将把选中的 ${ids.length} 单移入回收站（保留 7 天可还原）。确定继续？`, async () => {
+    const results = await Promise.allSettled(ids.map((id) => api(`/api/orders/${id}`, "DELETE")));
+    const ok = results.filter((r) => r.status === "fulfilled").length;
+    toast(`已删除 ${ok} 单${ok < ids.length ? `，${ids.length - ok} 单失败` : ""}`);
+    state.batchSelected = [];
+    await loadOrders();
+    render();
+  });
+};
 
 /* ===== 滑动确认交互（外卖式）===== */
 function bindSwipeButtons() {
@@ -465,16 +536,25 @@ function orderCard(o) {
   const isEnded = o.status === "done" || o.status === "cancelled";
   const isCancelled = o.status === "cancelled";
 
+  // 多选模式：可勾选（仅待配送/配送中），点击卡片切换选中
+  const canBatch = state.batchMode && !isEnded;
+  const checked = state.batchSelected.includes(o.id);
+  const batchBox = canBatch
+    ? `<label class="batch-check ${checked ? "on" : ""}" onclick="event.preventDefault(); App.toggleBatchSelect(${o.id})"><i class="bi ${checked ? "bi-check-circle-fill" : "bi-circle"}"></i></label>`
+    : "";
+  const cardClick = canBatch ? ` onclick="App.toggleBatchSelect(${o.id})" style="cursor:pointer"` : "";
+
   const actions = `
-    <div class="order-actions">
+    <div class="order-actions" onclick="event.stopPropagation()">
       ${o.status !== "pending" ? `<button class="btn ghost sm" onclick="App.setStatus(${o.id},'pending')" title="退回待配送"><i class="bi bi-arrow-counterclockwise"></i> 退回</button>` : ""}
       <button class="btn ghost sm" onclick="App.editOrder(${o.id})"><i class="bi bi-pencil"></i> 编辑</button>
       <button class="btn ghost sm" onclick="App.delOrder(${o.id})"><i class="bi bi-trash3"></i> 删除</button>
     </div>
     ${swipeBtnHtml(o)}`;
 
-  return `<div class="card order-card card-status-${o.status} ${isEnded ? "done" : ""} ${isCancelled ? "cancelled" : ""}">
+  return `<div class="card order-card card-status-${o.status} ${isEnded ? "done" : ""} ${isCancelled ? "cancelled" : ""} ${checked ? "batch-checked" : ""}"${cardClick}>
     <div class="order-head">
+      ${batchBox}
       <div class="head-l">
         <span class="oid">#${o.id}</span>
         ${place}
