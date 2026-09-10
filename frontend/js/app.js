@@ -110,13 +110,6 @@ $("#pwdInput").addEventListener("keydown", (e) => { if (e.key === "Enter") submi
 function getMyName() {
   return localStorage.getItem("myName") || "";
 }
-window.App.setMyName = function () {
-  const name = prompt("输入你的昵称（用于操作日志署名，本机记住）：", getMyName());
-  if (name && name.trim()) {
-    localStorage.setItem("myName", name.trim());
-    toast(`已署名为「${name.trim()}」`);
-  }
-};
 
 async function api(path, method = "GET", body, _retried) {
   const headers = { "Content-Type": "application/json" };
@@ -653,6 +646,14 @@ window.App = {
   },
   closePwd,
   submitPwd,
+  // 操作人署名（操作日志用；必须在 window.App 创建后才能挂载）
+  setMyName() {
+    const name = prompt("输入你的昵称（用于操作日志署名，本机记住）：", getMyName());
+    if (name && name.trim()) {
+      localStorage.setItem("myName", name.trim());
+      toast(`已署名为「${name.trim()}」`);
+    }
+  },
   onBookInput,
   hideBookSuggest,
   pickBook,
