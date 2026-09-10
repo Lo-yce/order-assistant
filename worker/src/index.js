@@ -127,6 +127,9 @@ async function handleRequest(request, env) {
       if (p === '/api/book-stock' && method === 'GET') return await getBookStock(db);
       if (p === '/api/clear-done' && method === 'POST') return await clearDone(db, request);
 
+      // 数据版本（轮询增量探测用：轻量，变了才拉全量）
+      if (p === '/api/version' && method === 'GET') return await getDataVersion(db);
+
       // 回收站（软删订单/求书：列表/还原/彻底删/清空）
       if (p === '/api/recycle' && method === 'GET') return await getRecycle(db);
       if (p === '/api/recycle/restore' && method === 'POST') return await recycleRestore(db, request, await readBody(request));
@@ -340,6 +343,13 @@ async function clearDone(db, request) {
   await db.prepare("UPDATE orders SET deleted_at=?, updated_at=? WHERE status IN ('done','cancelled') AND deleted_at IS NULL").bind(now, now).run();
   await logAudit(db, request, 'order.clearDone', '', `已完成/已取消 ${before.c} 单移入回收站`);
   return json({ ok: true, data: { deleted: before.c } });
+}
+
+// 数据版本（轮询增量探测用）：订单数+最新变更时间+求书数，任何增删改都会变化
+async function getDataVersion(db) {
+  const o = await db.prepare('SELECT COUNT(*) AS c, MAX(updated_at) AS m FROM orders').first();
+  const w = await db.prepare('SELECT COUNT(*) AS c FROM wanted_books').first();
+  return json({ ok: true, data: { v: `o${o.c}-${o.m || ''}-w${w.c}` } });
 }
 
 // 统计：需求合计 + 库存 + 剩余；可选 ?building= 按苑筛选；已取消订单不计需求

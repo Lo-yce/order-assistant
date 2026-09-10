@@ -180,6 +180,14 @@ export async function onRequest({ request, env }) {
       return await clearDone();
     }
 
+    // ===== 数据版本（轮询增量探测用） =====
+    if (p === '/api/version' && method === 'GET') {
+      const orders = await load('orders');
+      const wanted = await load('wanted');
+      const maxUp = orders.reduce((m, o) => (o.updated_at > m ? o.updated_at : m), '');
+      return json({ ok: true, data: { v: `o${orders.length}-${maxUp}-w${wanted.length}` } });
+    }
+
     // ===== 回收站（软删订单/求书：列表/还原/彻底删/清空） =====
     if (p === '/api/recycle' && method === 'GET') return await getRecycle();
     if (p === '/api/recycle/restore' && method === 'POST') {

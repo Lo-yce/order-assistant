@@ -74,6 +74,11 @@
 
       <div class="field">
         <label>预定时间（不填则尽快）</label>
+        <div class="chips" style="margin-bottom:8px">
+          <button type="button" class="chip" onclick="setQuickTime(20, 0)">今晚 8 点</button>
+          <button type="button" class="chip" onclick="setQuickTime(12, 0, 1)">明天中午 12 点</button>
+          <button type="button" class="chip" onclick="setQuickTime(20, 0, 1)">明天晚上 8 点</button>
+        </div>
         <input class="input time" id="eTime" type="datetime-local" />
       </div>
       <div class="field">
@@ -163,6 +168,17 @@
       $("#mPickup").classList.toggle("active", m === "self_pickup");
       $("#deliveryFields").style.display = m === "delivery" ? "" : "none";
       $("#pickupFields").style.display = m === "self_pickup" ? "" : "none";
+    };
+
+    // 快捷时间：今晚 8 点（已过则顺延明天）/ 明天中午 / 明天晚上
+    window.setQuickTime = function(h, min, nextDay){
+      const d = new Date();
+      d.setDate(d.getDate() + (nextDay ? 1 : 0));
+      if (!nextDay && (d.getHours() > h || (d.getHours() === h && d.getMinutes() >= min))) {
+        d.setDate(d.getDate() + 1); // 今晚已过，顺延到明天
+      }
+      const p = (n) => String(n).padStart(2, "0");
+      $("#eTime").value = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(h)}:${p(min)}`;
     };
 
     // 大苑 → 楼号联动

@@ -1574,8 +1574,14 @@ window.App.exportManifest = function () {
 async function init() {
   await Promise.all([loadOrders(), loadBookNames(), loadWanted()]);
   render();
-  // 每 4 秒静默轮询
+  // 轮询：先探测轻量数据版本，有变化才拉全量（省流量）
+  let lastVer = "";
+  try { lastVer = (await api("/api/version")).v; } catch (e) {}
   setInterval(async () => {
+    let v;
+    try { v = (await api("/api/version")).v; } catch (e) { return; }
+    if (v === lastVer) return; // 数据没变，跳过
+    lastVer = v;
     await Promise.all([loadOrders(), loadBookNames(), loadWanted()]);
     // 正在编辑表单时不打断重绘
     if (state.currentTab === "new" || state.currentTab === "edit") return;
